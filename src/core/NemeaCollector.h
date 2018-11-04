@@ -99,6 +99,18 @@ namespace BeeeOn {
         */ 
         void onHciStats (const HciInfo &info) override;
 
+        /**
+        * Process data from OZW notification event
+        * \param[in] info BeeeOn class for OZW notification statistics
+        */ 
+    	void onNotification(const OZWNotificationEvent &event) override;
+
+        /**
+        * Process data from BeeeOn control commands
+        * \param[in] info BeeeOn class for control commands
+        */ 
+        void onDispatch(const Command::Ptr cmd) override;
+
         /* 
         * Setters for input data specified in the file factory.xml
         * Each event has its own setter
@@ -108,6 +120,8 @@ namespace BeeeOn {
         void setOnHCIStats (const string &interface);
         void setOnNodeStats (const string &interface);
         void setOnDriverStats (const string &interface);
+        void setOnNotification (const string &interface);
+        void setOnDispatch (const string &interface);
 
         /* 
         * Responsible for output interface initialization
@@ -121,5 +135,7 @@ namespace BeeeOn {
         EventMetaData onHCIStatsMetaInfo;
         EventMetaData onNodeStatsMetaInfo;
         EventMetaData onDriverStatsMetaInfo;
+        EventMetaData onNotificationMetaInfo;
+        EventMetaData onDispatchMetaInfo;
     };
 }
