@@ -215,6 +215,7 @@ void NemeaCollector::onDriverStats(const ZWaveDriverEvent &event) {}
 void NemeaCollector::onNodeStats(const ZWaveNodeEvent &event) {}
 #endif
 
+#ifdef HAVE_HCI
 void NemeaCollector::onHciStats(const HciInfo &event){
 
     // Catch current timestamp
@@ -242,6 +243,9 @@ void NemeaCollector::onHciStats(const HciInfo &event){
     // Send out recived data 
     trap_ctx_send(onHCIStatsMetaInfo.ctx, 0, onHCIStatsMetaInfo.udata, ur_rec_size(onHCIStatsMetaInfo.utmpl, onHCIStatsMetaInfo.udata));
 }
+#else
+void NemeaCollector::onHciStats(const HciInfo &event){}
+#endif
 
 #ifdef HAVE_OPENZWAVE
 void NemeaCollector::onNotification(const OZWNotificationEvent &event){
@@ -287,11 +291,15 @@ void NemeaCollector::setOnExport(const string& interface) {
     initInterface(onExportMetaInfo);
 }
 
+#ifdef HAVE_HCI
 void NemeaCollector::setOnHCIStats(const string& interface) {
     onHCIStatsMetaInfo.onEventInterface = interface;
     onHCIStatsMetaInfo.ufields = "ID,TIME,address,aclPackets,scoMtu,scoPackets,rxErrors,txErrors,rxEvents, txCmds,rxAcls,txAcls,rxScos,txScos,rxBytes,txBytes"; 
     initInterface(onHCIStatsMetaInfo);
 }
+#else
+void NemeaCollector::setOnHCIStats(const string& interface) {}
+#endif
 
 
 #ifdef HAVE_ZWAVE
