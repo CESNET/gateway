@@ -10,7 +10,7 @@ char *ur_field_names_static[] = {
 (char *)   "CMDCLASS",
 (char *)   "GENRE",
 (char *)   "GW_ID",
-(char *)   "ID",
+(char *)   "DEV_ADDR",
 (char *)   "INDEX",
 (char *)   "INSTANCE",
 (char *)   "NAKCount",
@@ -80,7 +80,7 @@ short ur_field_sizes_static[] = {
    8, /* CMDCLASS */
    8, /* GENRE */
    8, /* GW_ID */
-   8, /* ID */
+   8, /* DEV_ADDR */
    8, /* INDEX */
    8, /* INSTANCE */
    8, /* NAKCount */
@@ -150,13 +150,13 @@ ur_field_type_t ur_field_types_static[] = {
    UR_TYPE_DOUBLE, /* CMDCLASS */
    UR_TYPE_DOUBLE, /* GENRE */
    UR_TYPE_UINT64, /* GW_ID */
-   UR_TYPE_UINT64, /* ID */
+   UR_TYPE_UINT64, /* DEV_ADDR */
    UR_TYPE_DOUBLE, /* INDEX */
    UR_TYPE_DOUBLE, /* INSTANCE */
    UR_TYPE_DOUBLE, /* NAKCount */
    UR_TYPE_DOUBLE, /* OOFCount */
    UR_TYPE_DOUBLE, /* SOFCount */
-   UR_TYPE_DOUBLE, /* TIME */
+   UR_TYPE_TIME, /* TIME */
    UR_TYPE_DOUBLE, /* TYPE */
    UR_TYPE_DOUBLE, /* VALUE */
    UR_TYPE_DOUBLE, /* aclMtu */

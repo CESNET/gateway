@@ -114,7 +114,7 @@ namespace BeeeOn {
         /* 
         * Setters for input data specified in the file factory.xml
         * Each event has its own setter
-        * Each setter receives name of trap output interface as input param
+        * Each setter receives parameter value as input param
         */
         void setOnExport (const string &interface);
         void setOnHCIStats (const string &interface);
@@ -122,6 +122,7 @@ namespace BeeeOn {
         void setOnDriverStats (const string &interface);
         void setOnNotification (const string &interface);
         void setOnDispatch (const string &interface);
+        void setExportGwID (const string &gwID);
 
         /* 
         * Responsible for output interface initialization
@@ -137,5 +138,6 @@ namespace BeeeOn {
         EventMetaData onDriverStatsMetaInfo;
         EventMetaData onNotificationMetaInfo;
         EventMetaData onDispatchMetaInfo;
+        int exportGwID; // ID to identify data from this gateway
     };
 }

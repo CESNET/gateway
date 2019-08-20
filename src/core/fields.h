@@ -18,8 +18,8 @@
 #define F_GENRE_T   double
 #define F_GW_ID   6
 #define F_GW_ID_T   uint64_t
-#define F_ID   7
-#define F_ID_T   uint64_t
+#define F_DEV_ADDR   7
+#define F_DEV_ADDR_T   uint64_t
 #define F_INDEX   8
 #define F_INDEX_T   double
 #define F_INSTANCE   9
@@ -31,7 +31,7 @@
 #define F_SOFCount   12
 #define F_SOFCount_T   double
 #define F_TIME   13
-#define F_TIME_T   double
+#define F_TIME_T   ur_time_t
 #define F_TYPE   14
 #define F_TYPE_T   double
 #define F_VALUE   15

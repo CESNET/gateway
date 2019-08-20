@@ -107,6 +107,7 @@
 			<set name="onDriverStatsInterface" text="u:event-onDriverStats"/>	
 			<set name="onNotificationInterface" text="u:event-onNotification"/>	
 			<set name="onDispatchInterface" text="u:event-onDispatch"/>	
+			<set name="exportGwID" text="1101"/>	
         </instance>
 
 		<instance name="credentialsTool" class="BeeeOn::CredentialsTool">
