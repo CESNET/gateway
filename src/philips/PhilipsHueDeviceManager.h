@@ -8,9 +8,11 @@
 
 #include "core/AbstractSeeker.h"
 #include "core/DeviceManager.h"
+#include "core/PollingKeeper.h"
 #include "credentials/FileCredentialsStorage.h"
 #include "loop/StopControl.h"
 #include "model/DeviceID.h"
+#include "model/RefreshTime.h"
 #include "net/MACAddress.h"
 #include "philips/PhilipsHueBridge.h"
 #include "philips/PhilipsHueBulb.h"
@@ -52,6 +54,7 @@ public:
 	void run() override;
 	void stop() override;
 
+	void setDevicePoller(DevicePoller::Ptr poller);
 	void setUPnPTimeout(const Poco::Timespan &timeout);
 	void setHTTPTimeout(const Poco::Timespan &timeout);
 	void setRefresh(const Poco::Timespan &refresh);
@@ -61,31 +64,23 @@ public:
 	void registerListener(PhilipsHueListener::Ptr listener);
 
 protected:
-	void handleGeneric(const Command::Ptr cmd, Result::Ptr result) override;
 	void handleAccept(const DeviceAcceptCommand::Ptr cmd) override;
 	AsyncWork<>::Ptr startDiscovery(const Poco::Timespan &timeout) override;
 	AsyncWork<std::set<DeviceID>>::Ptr startUnpair(
 		const DeviceID &id,
 		const Poco::Timespan &timeout) override;
+	AsyncWork<double>::Ptr startSetValue(
+		const DeviceID &id,
+		const ModuleID &module,
+		const double value,
+		const Poco::Timespan &timeout) override;
 
-	void refreshPairedDevices();
 	void searchPairedDevices();
 
 	/**
 	 * @brief Erases the bridges which don't care any bulb.
 	 */
 	void eraseUnusedBridges();
-
-	/**
-	 * @brief Processes the set value command.
-	 */
-	void doSetValueCommand(const Command::Ptr cmd);
-
-	/**
-	 * @brief Sets the proper device's module to given value.
-	 * @return If the setting was successfull or not.
-	 */
-	bool modifyValue(const DeviceID& deviceID, const ModuleID& moduleID, const double value);
 
 	std::vector<PhilipsHueBulb::Ptr> seekBulbs(const StopControl& stop);
 
@@ -103,7 +98,8 @@ private:
 	std::map<MACAddress, PhilipsHueBridge::Ptr> m_bridges;
 	std::map<DeviceID, PhilipsHueBulb::Ptr> m_devices;
 
-	Poco::Timespan m_refresh;
+	PollingKeeper m_pollingKeeper;
+	RefreshTime m_refresh;
 	Poco::Timespan m_httpTimeout;
 	Poco::Timespan m_upnpTimeout;
 

@@ -27,16 +27,19 @@ option(ENABLE_UDEV "Enable support of udev" ON)
 option(ENABLE_BELKIN_WEMO "Enable support of Belkin Wemo" ON)
 option(ENABLE_BLUETOOTH_AVAILABILITY "Enable support of Bluetooth Availability" ON)
 option(ENABLE_BLE_SMART "Enable support of Bluetooth Low Energy Smart" ON)
+option(ENABLE_HCI_INFO_REPORTER "Enable support for HciInfoReporter" ON)
 option(ENABLE_JABLOTRON "Enable support of Jablotron" ON)
 option(ENABLE_PHILIPS_HUE "Enable support of Philips Hue" ON)
 option(ENABLE_VIRTUAL_DEVICES "Enable support of Virtual Devices" ON)
 option(ENABLE_VPT "Enable support of VPT" ON)
 option(ENABLE_ZWAVE "Enable support of ZWave" ON)
 option(ENABLE_TESTING_CENTER "Enable support of Testing Center" ON)
+option(ENABLE_VEKTIVA "Enable support of Vektiva" ON)
 option(ENABLE_PRESSURE_SENSOR "Enable support of internal air pressure sensor" ON)
 option(ENABLE_FITP "Enable support of FITP" ON)
 option(ENABLE_IQRF "Enable support of IQRF" ON)
 option(ENABLE_TESTS "Enable build of unit tests" ON)
+option(ENABLE_NEMEA "Enable nemea collector" OFF)
 
 add_subdirectory(src)
 add_subdirectory(base)
@@ -73,8 +76,12 @@ install(FILES conf/syslog-ng/udp-relay.conf
 	DESTINATION etc/syslog-ng/conf.d)
 install(FILES systemd/beeeon-gateway.service
 	DESTINATION lib/systemd/system)
-install(DIRECTORY udev/rules.d
-	DESTINATION etc/udev)
+
+if(ENABLE_UDEV)
+	install(DIRECTORY udev/rules.d
+		DESTINATION etc/udev)
+endif()
+
 install(DIRECTORY
 	DESTINATION var/run/beeeon/gateway)
 install(DIRECTORY

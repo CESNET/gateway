@@ -11,6 +11,7 @@
 #include "commands/DeviceAcceptCommand.h"
 #include "commands/DeviceSetValueCommand.h"
 #include "commands/DeviceUnpairCommand.h"
+#include "commands/DeviceSearchCommand.h"
 #include "commands/GatewayListenCommand.h"
 #include "core/AnswerQueue.h"
 #include "core/CommandHandler.h"
@@ -149,6 +150,58 @@ protected:
 	void handleListen(const GatewayListenCommand::Ptr cmd);
 
 	/**
+	 * @brief Start searching a device by IP address in a technology-specific way.
+	 * This method is always called inside a critical section and so
+	 * its implementation does not have to be thread-safe nor reentrant
+	 * (unless it cooperates with other threads itself).
+	 *
+	 * The purpose of this call is to initialize and start the searching
+	 * process which might be a non-blocking operation. The caller uses
+	 * the provided AsyncWork<> instance to wait until it finishes or to
+	 * cancel it earlier if needed.
+	 */
+	virtual AsyncWork<>::Ptr startSearch(
+		const Poco::Timespan &timeout,
+		const Poco::Net::IPAddress &address);
+
+	/**
+	 * @brief Start searching a device by MAC address in a technology-specific way.
+	 * This method is always called inside a critical section and so
+	 * its implementation does not have to be thread-safe nor reentrant
+	 * (unless it cooperates with other threads itself).
+	 *
+	 * The purpose of this call is to initialize and start the searching
+	 * process which might be a non-blocking operation. The caller uses
+	 * the provided AsyncWork<> instance to wait until it finishes or to
+	 * cancel it earlier if needed.
+	 */
+	virtual AsyncWork<>::Ptr startSearch(
+		const Poco::Timespan &timeout,
+		const MACAddress &address);
+
+	/**
+	 * @brief Start searching a device by serial number in a technology-specific way.
+	 * This method is always called inside a critical section and so
+	 * its implementation does not have to be thread-safe nor reentrant
+	 * (unless it cooperates with other threads itself).
+	 *
+	 * The purpose of this call is to initialize and start the searching
+	 * process which might be a non-blocking operation. The caller uses
+	 * the provided AsyncWork<> instance to wait until it finishes or to
+	 * cancel it earlier if needed.
+	 */
+	virtual AsyncWork<>::Ptr startSearch(
+		const Poco::Timespan &timeout,
+		const uint64_t serialNumber);
+
+	/**
+	 * @brief Implements handling of the search command in a generic way. The method
+	 * ensures that only 1 thread can exactly the search process at a time. It is
+	 * also mutual exclusive to the discovery process.
+	 */
+	void handleSearch(const DeviceSearchCommand::Ptr cmd);
+
+	/**
 	 * @brief Starts device unpair process in a technology-specific way.
 	 * This method is always called inside a critical section and so its
 	 * implementation does not have to be thread-safe nor reentrant
@@ -188,6 +241,38 @@ protected:
 			const Poco::Timespan &timeout);
 
 	/**
+	 * @brief Call an implementation of startSetValue() based on the
+	 * given operation mode.
+	 */
+	AsyncWork<double>::Ptr startSetValueByMode(
+			const DeviceID &id,
+			const ModuleID &module,
+			const double value,
+			const OpMode &mode,
+			const Poco::Timespan &timeout);
+
+	/**
+	 * @brief Default implementation just calls startSetValue().
+	 */
+	virtual AsyncWork<double>::Ptr startSetValueTryHarder(
+			const DeviceID &id,
+			const ModuleID &module,
+			const double value,
+			const Poco::Timespan &timeout);
+
+	/**
+	 * @brief Default implementation calls startSetValue() again
+	 * if a Poco::IOException is thrown until timeout exceeds. However,
+	 * due to asynchronous behaviour, this way of repeating on fail might
+	 * be inappropriate.
+	 */
+	virtual AsyncWork<double>::Ptr startSetValueRepeatOnFail(
+			const DeviceID &id,
+			const ModuleID &module,
+			const double value,
+			const Poco::Timespan &timeout);
+
+	/**
 	 * @brief Implements handling of the set-value command in a generic way.
 	 * The method ensures that only 1 thread can execute set-value process
 	 * at a time. If the set-value operation succeeds, it ships the set value.
@@ -202,31 +287,6 @@ protected:
 	* Ship data received from a physical device into a collection point.
 	*/
 	void ship(const SensorData &sensorData);
-
-	/**
-	 * Obtain device list from server, method is blocking/non-blocking.
-	 * Type of blocking is divided on the basis of timeout.
-	 * Blocking waiting returns device list from server and non-blocking
-	 * waiting returns device list from server or TimeoutException.
-	 */
-	[[deprecated("use DeviceFetcher instead")]]
-	std::set<DeviceID> deviceList(
-		const Poco::Timespan &timeout = DEFAULT_REQUEST_TIMEOUT);
-
-	/**
-	 * Obtain Answer with Results which contains last measured value
-	 * from server, method is blocking/non-blocking. Type of blocking
-	 * is divided on the basis of timeout.
-	 * Blocking waiting returns Answer with last measured value result
-	 * from server and non-blocking waiting returns Answer with last
-	 * measured value result from server or TimeoutException.
-	 *
-	 * If Answer contains several Results, the first Result SUCCESS will
-	 * be selected.
-	 */
-	[[deprecated("use DeviceFetcher instead")]]
-	double lastValue(const DeviceID &deviceID, const ModuleID &moduleID,
-		const Poco::Timespan &waitTime = DEFAULT_REQUEST_TIMEOUT);
 
 	/**
 	 * @returns the underlying DeviceCache instance
@@ -266,16 +326,7 @@ protected:
 		AnyAsyncWork::Ptr work,
 		const Poco::Timespan &timeout);
 
-private:
-	[[deprecated("use DeviceFetcher instead")]]
-	void requestDeviceList(Answer::Ptr answer);
-	[[deprecated("use DeviceFetcher instead")]]
-	std::set<DeviceID> responseDeviceList(
-		const Poco::Timespan &waitTime, Answer::Ptr answer);
-
 protected:
-	static const Poco::Timespan DEFAULT_REQUEST_TIMEOUT;
-
 	StopControl m_stopControl;
 
 private:

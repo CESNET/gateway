@@ -1,3 +1,4 @@
+#include <Poco/DateTimeFormatter.h>
 #include <Poco/Exception.h>
 #include <Poco/Logger.h>
 #include <Poco/NumberFormatter.h>
@@ -10,6 +11,9 @@
 
 BEEEON_OBJECT_BEGIN(BeeeOn, DBusHciInterfaceManager)
 BEEEON_OBJECT_CASTABLE(HciInterfaceManager)
+BEEEON_OBJECT_PROPERTY("leMaxAgeRssi", &DBusHciInterfaceManager::setLeMaxAgeRssi)
+BEEEON_OBJECT_PROPERTY("leMaxUnavailabilityTime", &DBusHciInterfaceManager::setLeMaxUnavailabilityTime)
+BEEEON_OBJECT_PROPERTY("classicArtificialAvaibilityTimeout", &DBusHciInterfaceManager::setClassicArtificialAvaibilityTimeout)
 BEEEON_OBJECT_END(BeeeOn, DBusHciInterfaceManager)
 
 using namespace BeeeOn;
@@ -18,18 +22,54 @@ using namespace std;
 
 static int CHANGE_POWER_ATTEMPTS = 5;
 static Timespan CHANGE_POWER_DELAY = 200 * Timespan::MILLISECONDS;
+static int GERROR_IN_PROGRESS = 36;
+static uint16_t RSSI_DEVICE_UNAVAILABLE = 0;
 
-DBusHciInterface::DBusHciInterface(const string& name):
+DBusHciInterface::DBusHciInterface(
+		const string& name,
+		const Timespan& leMaxAgeRssi,
+		const Timespan& leMaxUnavailabilityTime,
+		const Timespan& classicArtificialAvaibilityTimeout):
 	m_name(name),
-	m_loopThread(*this, &DBusHciInterface::runLoop)
+	m_loopThread(*this, &DBusHciInterface::runLoop),
+	m_leMaxAgeRssi(leMaxAgeRssi),
+	m_leMaxUnavailabilityTime(leMaxUnavailabilityTime),
+	m_classicArtificialAvaibilityTimeout(classicArtificialAvaibilityTimeout)
 {
+	poco_assert(leMaxAgeRssi > 0);
+	poco_assert(leMaxUnavailabilityTime > 0);
+	poco_assert(classicArtificialAvaibilityTimeout > 0);
+
 	m_adapter = retrieveBluezAdapter(createAdapterPath(m_name));
+	m_objectManager = createBluezObjectManager();
+
+	for (auto& one : processKnownDevices(m_objectManager)) {
+		const auto handle = ::g_signal_connect(
+			one.raw(),
+			"g-properties-changed",
+			G_CALLBACK(onDeviceRSSIChanged),
+			&m_devices);
+
+		Device device(one, handle);
+		m_devices.second.emplace(device.macAddress(), device);
+	}
+
+	m_objectManagerHandle = ::g_signal_connect(
+		G_DBUS_OBJECT_MANAGER(m_objectManager.raw()),
+		"object-added",
+		G_CALLBACK(onDBusObjectAdded),
+		&m_devices);
+
 	m_thread.start(m_loopThread);
 }
 
 DBusHciInterface::~DBusHciInterface()
 {
 	stopDiscovery(m_adapter);
+
+	::g_signal_handler_disconnect(m_objectManager.raw(), m_objectManagerHandle);
+	for (auto& one : m_devices.second)
+		::g_signal_handler_disconnect(one.second.device().raw(), one.second.rssiHandle());
 
 	if (::g_main_loop_is_running(m_loop.raw()))
 		::g_main_loop_quit(m_loop.raw());
@@ -45,8 +85,13 @@ DBusHciInterface::~DBusHciInterface()
  */
 static void throwErrorIfAny(const GlibPtr<GError> error)
 {
-	if (!error.isNull())
-		throw IOException(error->message);
+	if (!error.isNull()) {
+		// This error occured when the discovery or connection is already in progress.
+		if (error->code == GERROR_IN_PROGRESS)
+			return;
+		else
+			throw IOException(error->message);
+	}
 }
 
 void DBusHciInterface::up() const
@@ -71,7 +116,7 @@ void DBusHciInterface::down() const
 
 	ScopedLock<FastMutex> guard(m_statusMutex);
 
-	m_waitCondition.broadcast();
+	m_resetCondition.broadcast();
 
 	if (!::org_bluez_adapter1_get_powered(m_adapter.raw()))
 		return;
@@ -89,7 +134,34 @@ void DBusHciInterface::reset() const
 bool DBusHciInterface::detect(const MACAddress &address) const
 {
 	BluezHciInterface bluezHci(m_name);
-	return bluezHci.detect(address);
+	bool status = bluezHci.detect(address);
+
+	ScopedLock<FastMutex> guard(m_classicMutex);
+
+	auto it = m_seenClassicDevices.find(address);
+	if (it == m_seenClassicDevices.end()) {
+		if (status)
+			m_seenClassicDevices.emplace(address, Timestamp());
+
+		return status;
+	}
+
+	if (status) {
+		it->second.update();
+	}
+	else if (it->second.elapsed() <= m_classicArtificialAvaibilityTimeout.totalMicroseconds()) {
+		status = true;
+
+		if (logger().debug()) {
+			logger().debug(
+				"missing device " + address.toString(':') +
+				" is declared as available because it was seen " +
+				DateTimeFormatter::format(it->second, "%s") + " seconds ago",
+				__FILE__, __LINE__);
+		}
+	}
+
+	return status;
 }
 
 map<MACAddress, string> DBusHciInterface::scan() const
@@ -103,51 +175,43 @@ map<MACAddress, string> DBusHciInterface::lescan(const Timespan& timeout) const
 	logger().information("starting BLE scan for " +
 		to_string(timeout.totalSeconds()) + " seconds", __FILE__, __LINE__);
 
-	uint64_t managerHandle;
-	GlibPtr<GDBusObjectManager> objectManager = createBluezObjectManager();
-
-	ThreadSafeDevices foundDevices;
-	map<uint64_t, GlibPtr<OrgBluezDevice1>> allDevices;
-
-	for (auto device : processKnownDevices(objectManager)) {
-		uint64_t handle = ::g_signal_connect(
-			device.raw(),
-			"g-properties-changed",
-			G_CALLBACK(onDeviceRSSIChanged),
-			&foundDevices);
-
-		allDevices.emplace(handle, device);
-	}
-
-	managerHandle = ::g_signal_connect(
-		G_DBUS_OBJECT_MANAGER(objectManager.raw()),
-		"object-added",
-		G_CALLBACK(onDBusObjectAdded),
-		&foundDevices);
+	map<MACAddress, string> foundDevices;
 
 	startDiscovery(m_adapter, "le");
 
-	m_waitCondition.tryWait(timeout);
-
-	ScopedLock<FastMutex> guard(foundDevices.first);
-	for (auto one : foundDevices.second) {
-		GlibPtr<OrgBluezDevice1> device = retrieveBluezDevice(createDevicePath(m_name, one.first));
-		int16_t rssi = ::org_bluez_device1_get_rssi(device.raw());
-
-		if (logger().debug())
-			logger().debug("found BLE device " + one.second + " by address " + one.first.toString(':') +
-				" (" + to_string(rssi) + ")", __FILE__, __LINE__);
+	if (m_resetCondition.tryWait(timeout)) {
+		if (logger().debug()) {
+			logger().debug("the lescan was terminated prematurely",
+				__FILE__, __LINE__);
+		}
 	}
 
-	for (auto one : allDevices)
-		::g_signal_handler_disconnect(one.second.raw(), one.first);
+	ScopedLock<FastMutex> guard(m_devices.first);
+	for (auto one : m_devices.second) {
+		if (one.second.lastSeen().elapsed() > m_leMaxAgeRssi.totalMicroseconds())
+			continue;
 
-	::g_signal_handler_disconnect(objectManager.raw(), managerHandle);
+		const auto rssi = one.second.rssi();
+		if (rssi == RSSI_DEVICE_UNAVAILABLE)
+			continue;
+
+		const string name = one.second.name();
+		foundDevices.emplace(one.first, name);
+
+		if (logger().debug()) {
+			logger().debug("found BLE device " + name +
+				" by address " + one.first.toString(':') +
+				" (" + to_string(rssi) + ")",
+				__FILE__, __LINE__);
+		}
+	}
+
+	removeUnvailableDevices();
 
 	logger().information("BLE scan has finished, found " +
-		to_string(foundDevices.second.size()) + " device(s)", __FILE__, __LINE__);
+		to_string(foundDevices.size()) + " device(s)", __FILE__, __LINE__);
 
-	return foundDevices.second;
+	return foundDevices;
 }
 
 HciInfo DBusHciInterface::info() const
@@ -163,8 +227,13 @@ HciConnection::Ptr DBusHciInterface::connect(
 	if (logger().debug())
 		logger().debug("connecting to device " + address.toString(':'), __FILE__, __LINE__);
 
-	const string path = createDevicePath(m_name, address);
-	GlibPtr<OrgBluezDevice1> device = retrieveBluezDevice(path);
+	ScopedLockWithUnlock<FastMutex> guard(m_devices.first);
+	auto it = m_devices.second.find(address);
+	if (it == m_devices.second.end())
+		throw NotFoundException("failed to connect device " + address.toString(':'));
+
+	GlibPtr<OrgBluezDevice1> device = it->second.device();
+	guard.unlock();
 
 	if (!::org_bluez_device1_get_connected(device.raw())) {
 		GlibPtr<GError> error;
@@ -181,19 +250,20 @@ void DBusHciInterface::watch(
 		const MACAddress& address,
 		SharedPtr<WatchCallback> callBack)
 {
-	ScopedLock<FastMutex> lock(m_watchMutex);
+	ScopedLock<FastMutex> lock(m_devices.first);
 
-	auto it = m_watchedDevices.find(address);
-	if (it != m_watchedDevices.end())
+	auto it = m_devices.second.find(address);
+	if (it == m_devices.second.end())
+		throw NotFoundException("failed to watch device " + address.toString(':'));
+
+	if (it->second.isWatched())
 		return;
 
 	if (logger().debug())
 		logger().debug("watch the device " + address.toString(':'), __FILE__, __LINE__);
 
-	GlibPtr<OrgBluezDevice1> device = retrieveBluezDevice(createDevicePath(m_name, address));
-
 	uint64_t handle = ::g_signal_connect(
-		device.raw(),
+		it->second.device().raw(),
 		"g-properties-changed",
 		G_CALLBACK(onDeviceManufacturerDataRecieved),
 		callBack.get());
@@ -201,23 +271,26 @@ void DBusHciInterface::watch(
 	if (handle == 0)
 		throw IOException("failed to watch device " + address.toString());
 
-	WatchedDevice watchedDevice(device, handle, callBack);
-	m_watchedDevices.emplace(address, watchedDevice);
+	it->second.watch(handle, callBack);
 }
 
 void DBusHciInterface::unwatch(const MACAddress& address)
 {
-	ScopedLock<FastMutex> lock(m_watchMutex);
+	ScopedLock<FastMutex> lock(m_devices.first);
 
-	auto it = m_watchedDevices.find(address);
-	if (it == m_watchedDevices.end())
+	auto it = m_devices.second.find(address);
+	if (it == m_devices.second.end())
+		return;
+
+	if (!it->second.isWatched())
 		return;
 
 	if (logger().debug())
 		logger().debug("unwatch the device " + address.toString(':'), __FILE__, __LINE__);
 
-	::g_signal_handler_disconnect(it->second.device().raw(), it->second.signalHandle());
-	m_watchedDevices.erase(address);
+	const auto handle = it->second.watchHandle();
+	it->second.unwatch();
+	::g_signal_handler_disconnect(it->second.device().raw(), handle);
 }
 
 void DBusHciInterface::waitUntilPoweredChange(GlibPtr<OrgBluezAdapter1> adapter, const bool powered) const
@@ -241,8 +314,10 @@ void DBusHciInterface::startDiscovery(
 	if (::org_bluez_adapter1_get_discovering(adapter.raw()))
 		return;
 
+	GlibPtr<GError> error;
 	initDiscoveryFilter(adapter, trasport);
-	::org_bluez_adapter1_call_start_discovery_sync(adapter.raw(), nullptr, nullptr);
+	::org_bluez_adapter1_call_start_discovery_sync(adapter.raw(), nullptr, &error);
+	throwErrorIfAny(error);
 }
 
 void DBusHciInterface::stopDiscovery(GlibPtr<OrgBluezAdapter1> adapter) const
@@ -293,6 +368,33 @@ vector<GlibPtr<OrgBluezDevice1>> DBusHciInterface::processKnownDevices(
 	}
 
 	return devices;
+}
+
+void DBusHciInterface::removeUnvailableDevices() const
+{
+	for (auto it = m_devices.second.begin(); it != m_devices.second.end(); ) {
+		if (it->second.isWatched()) {
+			it++;
+			continue;
+		}
+
+		if (it->second.lastSeen().elapsed() > m_leMaxUnavailabilityTime.totalMicroseconds()) {
+			logger().information(
+				"remove unavailable LE device " + it->second.macAddress().toString(':') +
+				" after " + DateTimeFormatter::format(it->second.lastSeen().elapsed()) +
+				" of inactivity", __FILE__, __LINE__);
+
+			::g_signal_handler_disconnect(it->second.device().raw(), it->second.rssiHandle());
+
+			string devicePath = createDevicePath(m_name, it->second.macAddress());
+
+			it = m_devices.second.erase(it);
+			::org_bluez_adapter1_call_remove_device_sync(m_adapter.raw(), devicePath.c_str(), nullptr, nullptr);
+		}
+		else {
+			it++;
+		}
+	}
 }
 
 void DBusHciInterface::runLoop()
@@ -351,14 +453,17 @@ void DBusHciInterface::onDBusObjectAdded(
 	BEEEON_CATCH_CHAIN_ACTION(Loggable::forClass(typeid(DBusHciInterface)),
 		return);
 
-	MACAddress mac = MACAddress::parse(::org_bluez_device1_get_address(device.raw()), ':');
-	const char* charName = ::org_bluez_device1_get_name(device.raw());
-	const string name = charName == nullptr ? "unknown" : charName;
+	const auto handle = ::g_signal_connect(
+		device.raw(),
+		"g-properties-changed",
+		G_CALLBACK(onDeviceRSSIChanged),
+		userData);
 
-	ThreadSafeDevices &foundDevices = *(reinterpret_cast<ThreadSafeDevices*>(userData));
+	ThreadSafeDevices &devices = *(reinterpret_cast<ThreadSafeDevices*>(userData));
 
-	ScopedLock<FastMutex> guard(foundDevices.first);
-	foundDevices.second.emplace(mac, name);
+	ScopedLock<FastMutex> guard(devices.first);
+	Device newDevice(device, handle);
+	devices.second.emplace(newDevice.macAddress(), newDevice);
 }
 
 gboolean DBusHciInterface::onDeviceRSSIChanged(
@@ -373,17 +478,16 @@ gboolean DBusHciInterface::onDeviceRSSIChanged(
 	GVariantIter* iter;
 	const char* property;
 	GVariant* value;
-	ThreadSafeDevices &foundDevices = *(reinterpret_cast<ThreadSafeDevices*>(userData));
+	ThreadSafeDevices &devices = *(reinterpret_cast<ThreadSafeDevices*>(userData));
 
 	::g_variant_get(properties, "a{sv}", &iter);
 	while (::g_variant_iter_loop(iter, "{&sv}", &property, &value)) {
 		if (string(property) == "RSSI") {
-			const auto &mac = MACAddress::parse(::org_bluez_device1_get_address(device), ':');
-			const char* charName = ::org_bluez_device1_get_name(device);
-			const string name = charName == nullptr ? "unknown" : charName;
-
-			ScopedLock<FastMutex> guard(foundDevices.first);
-			foundDevices.second.emplace(mac, name);
+			ScopedLock<FastMutex> guard(devices.first);
+			MACAddress mac = MACAddress::parse(::org_bluez_device1_get_address(device), ':');
+			auto it = devices.second.find(mac);
+			if (it != devices.second.end())
+				it->second.updateLastSeen();
 
 			break;
 		}
@@ -497,19 +601,64 @@ GlibPtr<OrgBluezDevice1> DBusHciInterface::retrieveBluezDevice(const string& pat
 	return device;
 }
 
-DBusHciInterface::WatchedDevice::WatchedDevice(
+DBusHciInterface::Device::Device(
 		const GlibPtr<OrgBluezDevice1> device,
-		const uint64_t signalHandle,
-		const Poco::SharedPtr<WatchCallback> callBack):
+		const uint64_t rssiHandle):
 	m_device(device),
-	m_signalHandle(signalHandle),
-	m_callBack(callBack)
+	m_rssiHandle(rssiHandle)
 {
 }
 
-
-DBusHciInterfaceManager::DBusHciInterfaceManager()
+string DBusHciInterface::Device::name()
 {
+	const char* charName = ::org_bluez_device1_get_name(m_device.raw());
+	const string name = charName == nullptr ? "unknown" : charName;
+
+	return name;
+}
+
+MACAddress DBusHciInterface::Device::macAddress()
+{
+	return MACAddress::parse(::org_bluez_device1_get_address(m_device.raw()), ':');
+}
+
+int16_t DBusHciInterface::Device::rssi()
+{
+	return ::org_bluez_device1_get_rssi(m_device.raw());
+}
+
+
+DBusHciInterfaceManager::DBusHciInterfaceManager():
+	m_leMaxAgeRssi(30 * Timespan::SECONDS),
+	m_leMaxUnavailabilityTime(7 * Timespan::DAYS),
+	m_classicArtificialAvaibilityTimeout(30 * Timespan::SECONDS)
+{
+}
+
+void DBusHciInterfaceManager::setLeMaxAgeRssi(const Timespan& time)
+{
+	if (time.totalSeconds() <= 0)
+		throw InvalidArgumentException("LE max age RSSI must be at least a second");
+
+	m_leMaxAgeRssi = time;
+}
+
+void DBusHciInterfaceManager::setLeMaxUnavailabilityTime(const Poco::Timespan& time)
+{
+	if (time.totalSeconds() <= 0) {
+		throw InvalidArgumentException(
+			"maximum LE device unavailability time must be at least a second");
+	}
+
+	m_leMaxUnavailabilityTime = time;
+}
+
+void DBusHciInterfaceManager::setClassicArtificialAvaibilityTimeout(const Timespan& time)
+{
+	if (time.totalSeconds() <= 0)
+		throw InvalidArgumentException("Classic artificial avaibility timeout must be at least a second");
+
+	m_classicArtificialAvaibilityTimeout = time;
 }
 
 HciInterface::Ptr DBusHciInterfaceManager::lookup(const string &name)
@@ -520,7 +669,11 @@ HciInterface::Ptr DBusHciInterfaceManager::lookup(const string &name)
 	if (it != m_interfaces.end())
 		return it->second;
 
-	DBusHciInterface::Ptr newHci = new DBusHciInterface(name);
+	DBusHciInterface::Ptr newHci = new DBusHciInterface(
+		name,
+		m_leMaxAgeRssi,
+		m_leMaxUnavailabilityTime,
+		m_classicArtificialAvaibilityTimeout);
 	m_interfaces.emplace(name, newHci);
 	return newHci;
 }

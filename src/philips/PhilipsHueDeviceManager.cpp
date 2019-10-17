@@ -28,6 +28,7 @@ BEEEON_OBJECT_CASTABLE(StoppableRunnable)
 BEEEON_OBJECT_CASTABLE(CommandHandler)
 BEEEON_OBJECT_CASTABLE(DeviceStatusHandler)
 BEEEON_OBJECT_PROPERTY("deviceCache", &PhilipsHueDeviceManager::setDeviceCache)
+BEEEON_OBJECT_PROPERTY("devicePoller", &PhilipsHueDeviceManager::setDevicePoller)
 BEEEON_OBJECT_PROPERTY("distributor", &PhilipsHueDeviceManager::setDistributor)
 BEEEON_OBJECT_PROPERTY("commandDispatcher", &PhilipsHueDeviceManager::setCommandDispatcher)
 BEEEON_OBJECT_PROPERTY("upnpTimeout", &PhilipsHueDeviceManager::setUPnPTimeout)
@@ -54,7 +55,7 @@ PhilipsHueDeviceManager::PhilipsHueDeviceManager():
 		typeid(DeviceUnpairCommand),
 		typeid(DeviceSetValueCommand),
 	}),
-	m_refresh(5 * Timespan::SECONDS),
+	m_refresh(RefreshTime::fromSeconds(5)),
 	m_httpTimeout(3 * Timespan::SECONDS),
 	m_upnpTimeout(5 * Timespan::SECONDS)
 {
@@ -64,25 +65,23 @@ void PhilipsHueDeviceManager::run()
 {
 	logger().information("starting Philips Hue device manager", __FILE__, __LINE__);
 
-	set<DeviceID> paired = waitRemoteStatus(-1);
-
-	if (paired.size() > 0)
-		searchPairedDevices();
-
 	StopControl::Run run(m_stopControl);
 
 	while (run) {
-		Timestamp now;
-
+		searchPairedDevices();
 		eraseUnusedBridges();
 
-		refreshPairedDevices();
+		for (auto pair : m_devices) {
+			if (deviceCache()->paired(pair.second->id()))
+				m_pollingKeeper.schedule(pair.second);
+			else
+				m_pollingKeeper.cancel(pair.second->id());
+		}
 
-		Timespan sleepTime = m_refresh - now.elapsed();
-		if (sleepTime > 0)
-			run.waitStoppable(sleepTime);
+		run.waitStoppable(m_refresh);
 	}
 
+	m_pollingKeeper.cancelAll();
 	logger().information("stopping Philips Hue device manager", __FILE__, __LINE__);
 }
 
@@ -92,12 +91,17 @@ void PhilipsHueDeviceManager::stop()
 	answerQueue().dispose();
 }
 
+void PhilipsHueDeviceManager::setDevicePoller(DevicePoller::Ptr poller)
+{
+	m_pollingKeeper.setDevicePoller(poller);
+}
+
 void PhilipsHueDeviceManager::setRefresh(const Timespan &refresh)
 {
 	if (refresh.totalSeconds() <= 0)
 		throw InvalidArgumentException("refresh time must at least a second");
 
-	m_refresh = refresh;
+	m_refresh = RefreshTime::fromSeconds(refresh.totalSeconds());
 }
 
 void PhilipsHueDeviceManager::setUPnPTimeout(const Timespan &timeout)
@@ -137,52 +141,40 @@ void PhilipsHueDeviceManager::registerListener(PhilipsHueListener::Ptr listener)
 	m_eventSource.addListener(listener);
 }
 
-void PhilipsHueDeviceManager::refreshPairedDevices()
-{
-	vector<PhilipsHueBulb::Ptr> devices;
-
-	ScopedLockWithUnlock<FastMutex> lock(m_pairedMutex);
-	for (auto &id : deviceCache()->paired(prefix())) {
-		auto it = m_devices.find(id);
-		if (it == m_devices.end()) {
-			logger().warning("no such device: " + id.toString(),
-				__FILE__, __LINE__);
-			continue;
-		}
-
-		devices.push_back(it->second);
-	}
-	lock.unlock();
-
-	for (auto &device : devices) {
-		try {
-			ScopedLock<FastMutex> guard(device->lock());
-			ship(device->requestState());
-		}
-		catch (Exception& e) {
-			logger().log(e, __FILE__, __LINE__);
-			logger().warning("device " + device->deviceID().toString() +
-				" did not answer", __FILE__, __LINE__);
-		}
-	}
-}
-
 void PhilipsHueDeviceManager::searchPairedDevices()
 {
-	vector<PhilipsHueBulb::Ptr> bulbs = seekBulbs(m_stopControl);
-
-	ScopedLockWithUnlock<FastMutex> lockBulb(m_pairedMutex);
-	for (auto device : bulbs) {
-		if (deviceCache()->paired(device->deviceID()))
-			m_devices.emplace(device->deviceID(), device);
+	set<DeviceID> pairedDevices;
+	ScopedLockWithUnlock<FastMutex> guard(m_pairedMutex);
+	for (auto &id : deviceCache()->paired(prefix())) {
+		auto it = m_devices.find(id);
+		if (it == m_devices.end())
+			pairedDevices.insert(id);
 	}
-	lockBulb.unlock();
+	guard.unlock();
+
+	if (pairedDevices.size() <= 0)
+		return;
+
+	logger().information("discovering of paired devices...", __FILE__, __LINE__);
+
+	vector<PhilipsHueBulb::Ptr> foundBulbs = seekBulbs(m_stopControl);
+
+	ScopedLock<FastMutex> lock(m_pairedMutex);
+	for (const auto &device : foundBulbs) {
+		if (pairedDevices.find(device->id()) == pairedDevices.end())
+			continue;
+
+		m_devices.emplace(device->id(), device);
+
+		logger().information("found " + device->name() + " " + device->id().toString(),
+			__FILE__, __LINE__);
+	}
 }
 
 void PhilipsHueDeviceManager::eraseUnusedBridges()
 {
 	try {
-		ScopedLock<FastMutex> lock(m_bridgesMutex, m_refresh.totalMilliseconds());
+		ScopedLock<FastMutex> lock(m_bridgesMutex, m_refresh.time().totalMilliseconds());
 
 		vector<PhilipsHueBridge::Ptr> bridges;
 
@@ -209,16 +201,6 @@ void PhilipsHueDeviceManager::eraseUnusedBridges()
 	}
 }
 
-void PhilipsHueDeviceManager::handleGeneric(const Command::Ptr cmd, Result::Ptr result)
-{
-	if (cmd->is<DeviceSetValueCommand>()) {
-		doSetValueCommand(cmd);
-	}
-	else {
-		DeviceManager::handleGeneric(cmd, result);
-	}
-}
-
 AsyncWork<>::Ptr PhilipsHueDeviceManager::startDiscovery(const Timespan &timeout)
 {
 	PhilipsHueSeeker::Ptr seeker = new PhilipsHueSeeker(*this, timeout);
@@ -241,6 +223,7 @@ AsyncWork<set<DeviceID>>::Ptr PhilipsHueDeviceManager::startUnpair(
 	}
 	else {
 		deviceCache()->markUnpaired(id);
+		m_pollingKeeper.cancel(id);
 
 		auto itDevice = m_devices.find(id);
 		if (itDevice != m_devices.end())
@@ -261,55 +244,35 @@ void PhilipsHueDeviceManager::handleAccept(const DeviceAcceptCommand::Ptr cmd)
 		throw NotFoundException("accept: " + cmd->deviceID().toString());
 
 	DeviceManager::handleAccept(cmd);
+	m_pollingKeeper.schedule(it->second);
 }
 
-void PhilipsHueDeviceManager::doSetValueCommand(const Command::Ptr cmd)
+AsyncWork<double>::Ptr PhilipsHueDeviceManager::startSetValue(
+		const DeviceID &id,
+		const ModuleID &module,
+		const double value,
+		const Timespan &timeout)
 {
-	DeviceSetValueCommand::Ptr cmdSet = cmd.cast<DeviceSetValueCommand>();
+	ScopedLock<FastMutex> lock(m_pairedMutex, timeout.totalMilliseconds());
 
-	if (!modifyValue(cmdSet->deviceID(), cmdSet->moduleID(), cmdSet->value())) {
+	auto it = m_devices.find(id);
+	if (it == m_devices.end())
+		throw NotFoundException("set-value: " + id.toString());
+
+	ScopedLock<FastMutex> guard(it->second->lock());
+	if (!it->second->requestModifyState(module, value)) {
 		throw IllegalStateException(
-			"set-value: " + cmdSet->deviceID().toString());
+				"set-value: " + id.toString());
 	}
 
-	logger().debug("success to change state of device " + cmdSet->deviceID().toString(),
-		__FILE__, __LINE__);
-
-	try {
-		SensorData data;
-		data.setDeviceID(cmdSet->deviceID());
-		data.insertValue({cmdSet->moduleID(), cmdSet->value()});
-		ship(data);
-	}
-	BEEEON_CATCH_CHAIN(logger())
-}
-
-bool PhilipsHueDeviceManager::modifyValue(const DeviceID& deviceID,
-	const ModuleID& moduleID, const double value)
-{
-	FastMutex::ScopedLock lock(m_pairedMutex);
-
-	try {
-		auto it = m_devices.find(deviceID);
-		if (it == m_devices.end()) {
-			logger().warning("no such device: " + deviceID.toString(), __FILE__, __LINE__);
-			return false;
-		}
-		else {
-			ScopedLock<FastMutex> guard(it->second->lock());
-			return it->second->requestModifyState(moduleID, value);
-		}
-	}
-	catch (const Exception& e) {
-		logger().log(e, __FILE__, __LINE__);
-		logger().warning("failed to change state of device " + deviceID.toString(),
+	if (logger().debug()) {
+		logger().debug("success to change state of device " + id.toString(),
 			__FILE__, __LINE__);
 	}
-	catch (...) {
-		logger().critical("unexpected exception", __FILE__, __LINE__);
-	}
 
-	return false;
+	auto work = BlockingAsyncWork<double>::instance();
+	work->setResult(value);
+	return work;
 }
 
 vector<PhilipsHueBulb::Ptr> PhilipsHueDeviceManager::seekBulbs(const StopControl& stop)
@@ -327,7 +290,7 @@ vector<PhilipsHueBulb::Ptr> PhilipsHueDeviceManager::seekBulbs(const StopControl
 
 		PhilipsHueBridge::Ptr bridge;
 		try {
-			bridge = PhilipsHueBridge::buildDevice(address, m_httpTimeout);
+			bridge = new PhilipsHueBridge(address, m_httpTimeout);
 		}
 		catch (const TimeoutException& e) {
 			logger().debug("found device has disconnected", __FILE__, __LINE__);
@@ -398,10 +361,10 @@ vector<PhilipsHueBulb::Ptr> PhilipsHueDeviceManager::seekBulbs(const StopControl
 		for (auto bulb : bulbs) {
 			if (bulb.first == "Dimmable light") {
 				PhilipsHueDimmableBulb::Ptr newDevice = new PhilipsHueDimmableBulb(
-					bulb.second.first, bulb.second.second, bridge);
+					bulb.second.first, bulb.second.second, bridge, m_refresh);
 				devices.push_back(newDevice);
 
-				logger().information("discovered Philips Hue Bulb " + newDevice->deviceID().toString(),
+				logger().information("discovered Philips Hue Bulb " + newDevice->id().toString(),
 					__FILE__, __LINE__);
 			}
 			else {
@@ -455,22 +418,26 @@ void PhilipsHueDeviceManager::processNewDevice(PhilipsHueBulb::Ptr newDevice)
 	/*
 	 * Finds out if the device is already added.
 	 */
-	auto it = m_devices.emplace(newDevice->deviceID(), newDevice);
+	auto it = m_devices.emplace(newDevice->id(), newDevice);
 
 	if (!it.second)
 		return;
 
-	logger().debug("found device " + newDevice->deviceID().toString(),
+	logger().debug("found device " + newDevice->id().toString(),
 		__FILE__, __LINE__);
 
-	auto types = newDevice->moduleTypes();
-	dispatch(
-		new NewDeviceCommand(
-			newDevice->deviceID(),
-			PHILIPS_HUE_VENDOR,
-			newDevice->name(),
-			types,
-			m_refresh));
+	const auto description = DeviceDescription::Builder()
+		.id(newDevice->id())
+		.type(PHILIPS_HUE_VENDOR, newDevice->name())
+		.modules(newDevice->moduleTypes())
+		.refreshTime(m_refresh)
+		.name(newDevice->info().name())
+		.firmware(newDevice->info().swVersion())
+		.ipAddress(newDevice->bridge()->address().host())
+		.macAddress(newDevice->bridge()->macAddress())
+		.build();
+
+	dispatch(new NewDeviceCommand(description));
 
 	fireBulbStatistics(newDevice);
 }
@@ -507,7 +474,6 @@ PhilipsHueDeviceManager::PhilipsHueSeeker::PhilipsHueSeeker(PhilipsHueDeviceMana
 
 void PhilipsHueDeviceManager::PhilipsHueSeeker::seekLoop(StopControl &control)
 {
-	Timestamp now;
 	StopControl::Run run(control);
 
 	while (remaining() > 0) {

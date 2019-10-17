@@ -6,10 +6,16 @@
 using namespace BeeeOn;
 using namespace Poco;
 
-BLESmartDevice::BLESmartDevice(const MACAddress& address, const Timespan& timeout):
+BLESmartDevice::BLESmartDevice(
+		const MACAddress& address,
+		const Timespan& timeout,
+		const RefreshTime& refresh,
+		const HciInterface::Ptr hci):
 	m_deviceId(DevicePrefix::PREFIX_BLE_SMART, address),
 	m_address(address),
-	m_timeout(timeout)
+	m_timeout(timeout),
+	m_refresh(refresh),
+	m_hci(hci)
 {
 }
 
@@ -17,26 +23,38 @@ BLESmartDevice::~BLESmartDevice()
 {
 }
 
-DeviceID BLESmartDevice::deviceID() const
+DeviceID BLESmartDevice::id() const
 {
 	return m_deviceId;
 }
 
+RefreshTime BLESmartDevice::refresh() const
+{
+	return m_refresh;
+}
+
+MACAddress BLESmartDevice::macAddress() const
+{
+	return m_address;
+}
+
+bool BLESmartDevice::pollable() const
+{
+	return false;
+}
+
 void BLESmartDevice::pair(
-		HciInterface::Ptr,
 		Poco::SharedPtr<HciInterface::WatchCallback>)
+{
+}
+
+void BLESmartDevice::poll(Distributor::Ptr)
 {
 }
 
 void BLESmartDevice::requestModifyState(
 		const ModuleID&,
-		const double,
-		const HciInterface::Ptr)
-{
-	throw NotImplementedException(__func__ );
-}
-
-SensorData BLESmartDevice::requestState(const HciInterface::Ptr)
+		const double)
 {
 	throw NotImplementedException(__func__ );
 }

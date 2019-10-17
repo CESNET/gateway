@@ -14,8 +14,10 @@
 #include "commands/DeviceSetValueCommand.h"
 #include "core/AbstractSeeker.h"
 #include "core/DongleDeviceManager.h"
+#include "core/PollingKeeper.h"
 #include "loop/StopControl.h"
 #include "model/DeviceID.h"
+#include "model/RefreshTime.h"
 #include "net/MACAddress.h"
 #include "util/AsyncWork.h"
 
@@ -70,9 +72,11 @@ public:
 	bool dongleMissing() override;
 	void stop() override;
 
+	void setDevicePoller(DevicePoller::Ptr poller);
 	void setScanTimeout(const Poco::Timespan &timeout);
 	void setDeviceTimeout(const Poco::Timespan &timeout);
 	void setRefresh(const Poco::Timespan &refresh);
+	void setNumberOfExaminationThreads(const int numberOfExaminationThreads);
 	void setHciManager(HciInterfaceManager::Ptr manager);
 
 protected:
@@ -92,13 +96,6 @@ protected:
 		const Poco::Timespan &timeout) override;
 
 	/**
-	 * @brief In the first step, it tries to find not found paired
-	 * devices and then requests the actual state of all found paired
-	 * devices.
-	 */
-	void refreshPairedDevices();
-
-	/**
 	 * @brief Clears m_devices.
 	 */
 	void eraseAllDevices();
@@ -115,9 +112,7 @@ protected:
 	 * @brief Tries to find not found paired devices. Each found device
 	 * is added to parametr devices and attribute m_devices.
 	 */
-	void seekPairedDevices(
-		const std::set<DeviceID> pairedDevices,
-		std::vector<BLESmartDevice::Ptr>& devices);
+	void seekPairedDevices();
 
 	/**
 	 * @brief Seeks for new devices on Bluetooth LE network.
@@ -133,6 +128,28 @@ protected:
 		const StopControl& stop);
 
 	/**
+	 * @brief Splits the map of devices into smaller maps whose number
+	 * is determined by the attribute m_numberOfExaminationThreads.
+	 * These maps of devices are then examines in the seperated threads.
+	 */
+	void threadedExaminationOfDevices(
+		const std::map<MACAddress, std::string>& devices,
+		Poco::FastMutex& foundDevicesMutex,
+		std::vector<BLESmartDevice::Ptr>& foundDevices,
+		const StopControl& stop);
+
+	/**
+	 * @brief Finds out if the given devices are supported. In the
+	 * positive case, a specific instance of the device is created
+	 * for it.
+	 */
+	void examineBatchOfDevices(
+		const std::map<MACAddress, std::string>& devices,
+		Poco::FastMutex& foundDevicesMutex,
+		std::vector<BLESmartDevice::Ptr>& foundDevices,
+		const StopControl& stop);
+
+	/**
 	 * @brief Creates BLE device based on its Model ID.
 	 */
 	BLESmartDevice::Ptr createDevice(const MACAddress& address) const;
@@ -144,9 +161,11 @@ private:
 	std::map<DeviceID, BLESmartDevice::Ptr> m_devices;
 	Poco::SharedPtr<HciInterface::WatchCallback> m_watchCallback;
 
+	PollingKeeper m_pollingKeeper;
 	Poco::Timespan m_scanTimeout;
 	Poco::Timespan m_deviceTimeout;
-	Poco::Timespan m_refresh;
+	RefreshTime m_refresh;
+	uint32_t m_numberOfExaminationThreads;
 	HciInterfaceManager::Ptr m_hciManager;
 	HciInterface::Ptr m_hci;
 };

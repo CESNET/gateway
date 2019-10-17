@@ -13,8 +13,10 @@
 #include "belkin/BelkinWemoSwitch.h"
 #include "core/AbstractSeeker.h"
 #include "core/DeviceManager.h"
+#include "core/PollingKeeper.h"
 #include "loop/StopControl.h"
 #include "model/DeviceID.h"
+#include "model/RefreshTime.h"
 #include "net/MACAddress.h"
 #include "util/AsyncWork.h"
 
@@ -41,6 +43,8 @@ public:
 
 	BelkinWemoDeviceManager();
 
+	void setDevicePoller(DevicePoller::Ptr poller);
+
 	void run() override;
 	void stop() override;
 
@@ -49,30 +53,23 @@ public:
 	void setRefresh(const Poco::Timespan &refresh);
 
 protected:
-	void handleGeneric(const Command::Ptr cmd, Result::Ptr result) override;
 	void handleAccept(const DeviceAcceptCommand::Ptr cmd) override;
 	AsyncWork<>::Ptr startDiscovery(const Poco::Timespan &timeout) override;
 	AsyncWork<std::set<DeviceID>>::Ptr startUnpair(
 		const DeviceID &id,
 		const Poco::Timespan &timeout) override;
+	AsyncWork<double>::Ptr startSetValue(
+		const DeviceID &id,
+		const ModuleID &module,
+		const double value,
+		const Poco::Timespan &timeout) override;
 
-	void refreshPairedDevices();
 	void searchPairedDevices();
 
 	/**
 	 * @brief Erases the links which don't care any bulb.
 	 */
 	void eraseUnusedLinks();
-
-	/**
-	 * @brief Processes the device set value command.
-	 */
-	void doSetValueCommand(const Command::Ptr cmd);
-	/**
-	 * @brief Sets the proper device's module to given value.
-	 * @return If the setting was successfull or not.
-	 */
-	bool modifyValue(const DeviceID& deviceID, const ModuleID& moduleID, const double value);
 
 	std::vector<BelkinWemoSwitch::Ptr> seekSwitches(const StopControl& stop);
 	std::vector<BelkinWemoBulb::Ptr> seekBulbs(const StopControl& stop);
@@ -87,7 +84,8 @@ private:
 	std::map<MACAddress, BelkinWemoLink::Ptr> m_links;
 	std::map<DeviceID, BelkinWemoDevice::Ptr> m_devices;
 
-	Poco::Timespan m_refresh;
+	RefreshTime m_refresh;
+	PollingKeeper m_pollingKeeper;
 	Poco::Timespan m_httpTimeout;
 	Poco::Timespan m_upnpTimeout;
 };

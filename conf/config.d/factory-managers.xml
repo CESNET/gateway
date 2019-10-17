@@ -13,6 +13,12 @@
 			<add name="runnables" ref="fitpDeviceManager" if-yes="${fitp.enable}" />
 			<add name="runnables" ref="zwaveDeviceManager" if-yes="${zwave.enable}" />
 			<add name="loops" ref="hciInfoReporter" if-yes="${bluetooth.reporting.enable}" />
+			<add name="runnables" ref="iqrfMqttClient" if-yes="${iqrf.enable}" />
+			<add name="runnables" ref="iqrfDeviceManager" if-yes="${iqrf.enable}" />
+			<add name="runnables" ref="iqrfMqttConnector" if-yes="${iqrf.enable}" />
+			<add name="runnables" ref="vektivaDeviceManager" if-yes="${vektiva.enable}" />
+			<add name="runnables" ref="vektivaMqttClient" if-yes="${vektiva.enable}" />
+			<add name="runnables" ref="vektivaStatusMqttClient" if-yes="${vektiva.enable}" />
 		</instance>
 
 		<instance name="pressureSensorManager" class="BeeeOn::PressureSensorManager">
@@ -27,6 +33,7 @@
 
 		<instance name="belkinwemoDeviceManager" class="BeeeOn::BelkinWemoDeviceManager">
 			<set name="deviceCache" ref="deviceCache" />
+			<set name="devicePoller" ref="devicePoller" />
 			<set name="httpTimeout" time="${belkinwemo.http.timeout}" />
 			<set name="upnpTimeout" time="${belkinwemo.upnp.timeout}" />
 			<set name="refresh" time="${belkinwemo.refresh}" />
@@ -36,6 +43,7 @@
 
 		<instance name="virtualDeviceManager" class="BeeeOn::VirtualDeviceManager">
 			<set name="deviceCache" ref="deviceCache" />
+			<set name="devicePoller" ref="devicePoller"/>
 			<set name="distributor" ref="distributor"/>
 			<set name="commandDispatcher" ref="commandDispatcher"/>
 			<set name="file" text="${vdev.ini}"/>
@@ -45,12 +53,15 @@
 		</instance>
 
 		<instance name="dbusHciManager" class="BeeeOn::DBusHciInterfaceManager">
+			<set name="leMaxAgeRssi" time="${bluetooth.le.maxAgeRssi}" />
+			<set name="leMaxUnavailabilityTime" time="7 d" />
+			<set name="classicArtificialAvaibilityTimeout" time="${bluetooth.classic.artificialAvaibilityTimeout}" />
 		</instance>
 
 		<instance name="bluetoothAvailability" class="BeeeOn::BluetoothAvailabilityManager">
 			<set name="deviceCache" ref="deviceCache" />
 			<set name="wakeUpTime" time="${bluetooth.availability.refresh}" />
-			<set name="leScanTime" time="${bluetooth.availability.le.scan.time}" />
+			<set name="leScanTime" time="${bluetooth.le.scanTime}" />
 			<set name="modes" list="${bluetooth.availability.modes}" />
 			<set name="distributor" ref="distributor" />
 			<set name="commandDispatcher" ref="commandDispatcher" />
@@ -67,9 +78,11 @@
 
 		<instance name="bleSmartDeviceManager" class="BeeeOn::BLESmartDeviceManager">
 			<set name="deviceCache" ref="deviceCache" />
-			<set name="scanTimeout" time="${blesmart.scan.timeout}" />
+			<set name="devicePoller" ref="devicePoller" />
+			<set name="scanTimeout" time="${bluetooth.le.scanTime}" />
 			<set name="deviceTimeout" time="${blesmart.device.timeout}" />
 			<set name="refresh" time="${blesmart.refresh}" />
+			<set name="numberOfExaminationThreads" number="${blesmart.numberOfExaminationThreads}" />
 			<set name="hciManager" ref="${blesmart.hci.impl}HciManager" />
 			<set name="distributor" ref="distributor" />
 			<set name="commandDispatcher" ref="commandDispatcher" />
@@ -93,6 +106,7 @@
 
 		<instance name="vptDeviceManager" class="BeeeOn::VPTDeviceManager">
 			<set name="deviceCache" ref="deviceCache" />
+			<set name="devicePoller" ref="devicePoller" />
 			<set name="httpTimeout" time="${vpt.http.timeout}" />
 			<set name="pingTimeout" time="${vpt.ping.timeout}" />
 			<set name="refresh" time="${vpt.refresh}" />
@@ -110,6 +124,7 @@
 
 		<instance name="philipsHueDeviceManager" class="BeeeOn::PhilipsHueDeviceManager">
 			<set name="deviceCache" ref="deviceCache" />
+			<set name="devicePoller" ref="devicePoller" />
 			<set name="httpTimeout" time="${philipshue.http.timeout}" />
 			<set name="upnpTimeout" time="${philipshue.upnp.timeout}" />
 			<set name="refresh" time="${philipshue.refresh}" />
@@ -200,6 +215,60 @@
 			<set name="registry" ref="zwaveMapperRegistry" />
 			<set name="commandDispatcher" ref="commandDispatcher" />
 			<set name="distributor" ref="distributor" />
+		</instance>
+
+		<instance name="iqrfMqttClient" class="BeeeOn::GatewayMosquittoClient">
+			<set name="host" text="${iqrf.mqtt.host}" />
+			<set name="port" number="${iqrf.mqtt.port}" />
+			<set name="clientID" text="${iqrf.mqtt.clientID}" />
+			<set name="subTopics" list="${iqrf.subscribeTopics}" />
+			<set name="gatewayInfo" ref="gatewayInfo" />
+		</instance>
+
+		<instance name="vektivaStatusMqttClient" class="BeeeOn::MosquittoClient">
+			<set name="host" text="${vektiva.mqtt.host}" />
+			<set name="port" number="${vektiva.mqtt.port}" />
+			<set name="clientID" text="${vektiva.mqtt.statusClientID}" />
+			<set name="subTopics" list="${vektiva.subscribeTopics}" />
+		</instance>
+
+		<instance name="vektivaMqttClient" class="BeeeOn::MosquittoClient">
+			<set name="host" text="${vektiva.mqtt.host}" />
+			<set name="port" number="${vektiva.mqtt.port}" />
+			<set name="clientID" text="${vektiva.mqtt.clientID}" />
+			<set name="subTopics" list="${vektiva.subscribeTopics}" />
+		</instance>
+
+		<instance name="iqrfDeviceManager" class="BeeeOn::IQRFDeviceManager">
+			<set name="distributor" ref="distributor" />
+			<set name="commandDispatcher" ref="commandDispatcher" />
+			<set name="mqttConnector" ref="iqrfMqttConnector" />
+			<set name="receiveTimeout" time="${iqrf.receiveTimeout}" />
+			<set name="refreshTime" time="${iqrf.refreshTime}" />
+			<set name="refreshTimePeripheralInfo" time="${iqrf.refreshTimePeripheralInfo}" />
+			<set name="devicesRetryTimeout" time="${iqrf.devicesRetryTimeout}" />
+			<set name="coordinatorReset" text="${iqrf.coordinatorReset}" />
+			<set name="deviceCache" ref="deviceCache" />
+			<set name="devicePoller" ref="devicePoller" />
+			<set name="protocols" ref="iqHomeDPAProtocol" />
+		</instance>
+
+		<instance name="vektivaDeviceManager" class="BeeeOn::VektivaDeviceManager">
+			<set name="deviceCache" ref="deviceCache" />
+			<set name="distributor" ref="distributor" />
+			<set name="commandDispatcher" ref="commandDispatcher" />
+			<set name="mqttClient" ref="vektivaMqttClient" />
+			<set name="mqttStatusClient" ref="vektivaStatusMqttClient" />
+			<set name="receiveTimeout" time="${vektiva.receiveTimeout}" />
+		</instance>
+
+		<instance name="iqrfMqttConnector" class="BeeeOn::IQRFMqttConnector">
+			<set name="mqttClient" ref="iqrfMqttClient" />
+			<set name="publishTopic" text="${iqrf.publishTopic}" />
+		</instance>
+
+		<instance name="iqHomeDPAProtocol" class="BeeeOn::DPAIQHomeProtocol" >
+			<set name="typesMapping" text="${iqrf.typesMapping.path}" />
 		</instance>
 	</factory>
 </system>

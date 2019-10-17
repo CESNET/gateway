@@ -9,6 +9,8 @@
 			<add name="runnables" ref="distributor" />
 			<add name="loops" ref="managersRunner" />
 			<add name="runnables" ref="deviceStatusFetcher" />
+			<add name="runnables" ref="pollExecutor" />
+			<add name="runnables" ref="devicePoller" />
 		</instance>
 
 		<instance name="applicationInstanceChecker" class="BeeeOn::SingleInstanceChecker" init="early">
@@ -24,11 +26,11 @@
 
 		<instance name="distributor" class="BeeeOn::QueuingDistributor">
 			<add name="exporters" ref="namedPipeExporter" if-yes="${exporter.pipe.enable}"/>
-			<add name="exporters" ref="mosquittoExporter" if-yes="${exporter.mqtt.enable}"/>
+			<add name="exporters" ref="mqttExporter" if-yes="${exporter.mqtt.enable}"/>
 			<add name="exporters" ref="gwServerConnector" if-yes="${gws.enable}" />
 			<set name="eventsExecutor" ref="asyncExecutor"/>
 			<add name="listeners" ref="loggingCollector" if-yes="${testing.collector.enable}" />
-			<add name="listeners" ref="collector"/>
+			<add name="listeners" ref="collector" if-yes="${nemea.collector.enable}" />
 		</instance>
 
 		<instance name="asyncExecutor" class="BeeeOn::SequentialAsyncExecutor">
@@ -48,8 +50,10 @@
 			<add name="handlers" ref="jablotronDeviceManager" if-yes="${jablotron.enable}"/>
 			<add name="handlers" ref="philipsHueDeviceManager" if-yes="${philipshue.enable}"/>
 			<add name="handlers" ref="virtualDeviceManager" if-yes="${vdev.enable}"/>
+			<add name="handlers" ref="vektivaDeviceManager" if-yes="${vektiva.enable}"/>
 			<add name="handlers" ref="vptDeviceManager" if-yes="${vpt.enable}"/>
 			<add name="handlers" ref="pressureSensorManager" if-yes="${psdev.enable}"/>
+			<add name="handlers" ref="iqrfDeviceManager" if-yes="${iqrf.enable}"/>
 			<add name="listeners" ref="loggingCollector" if-yes="${testing.collector.enable}" />
 			<add name="handlers" ref="fitpDeviceManager" if-yes="${fitp.enable}"/>
 			<add name="handlers" ref="zwaveDeviceManager" if-yes="${zwave.enable}"/>
@@ -68,9 +72,19 @@
 			<add name="handlers" ref="belkinwemoDeviceManager" if-yes="${belkinwemo.enable}" />
 			<add name="handlers" ref="philipsHueDeviceManager" if-yes="${philipshue.enable}" />
 			<add name="handlers" ref="vptDeviceManager" if-yes="${vpt.enable}" />
+			<add name="handlers" ref="vektivaDeviceManager" if-yes="${vektiva.enable}" />
 			<add name="handlers" ref="bluetoothAvailability" if-yes="${bluetooth.availability.enable}" />
 			<add name="handlers" ref="jablotronDeviceManager" if-yes="${jablotron.enable}" />
 			<add name="handlers" ref="bleSmartDeviceManager" if-yes="${blesmart.enable}" />
+			<add name="handlers" ref="iqrfDeviceManager" if-yes="${iqrf.enable}" />
+		</instance>
+
+		<instance name="pollExecutor" class="BeeeOn::SequentialAsyncExecutor">
+		</instance>
+
+		<instance name="devicePoller" class="BeeeOn::DevicePoller">
+			<set name="distributor" ref="distributor" />
+			<set name="pollExecutor" ref="pollExecutor" />
 		</instance>
 
 		<instance name="testingConsole" class="BeeeOn::TCPConsole">

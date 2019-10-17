@@ -22,12 +22,14 @@ BEEEON_OBJECT_CASTABLE(StoppableRunnable)
 BEEEON_OBJECT_CASTABLE(HotplugListener)
 BEEEON_OBJECT_CASTABLE(DeviceStatusHandler)
 BEEEON_OBJECT_PROPERTY("deviceCache", &BLESmartDeviceManager::setDeviceCache)
+BEEEON_OBJECT_PROPERTY("devicePoller", &BLESmartDeviceManager::setDevicePoller)
 BEEEON_OBJECT_PROPERTY("distributor", &BLESmartDeviceManager::setDistributor)
 BEEEON_OBJECT_PROPERTY("commandDispatcher", &BLESmartDeviceManager::setCommandDispatcher)
 BEEEON_OBJECT_PROPERTY("hciManager", &BLESmartDeviceManager::setHciManager)
 BEEEON_OBJECT_PROPERTY("scanTimeout", &BLESmartDeviceManager::setScanTimeout)
 BEEEON_OBJECT_PROPERTY("deviceTimeout", &BLESmartDeviceManager::setDeviceTimeout)
 BEEEON_OBJECT_PROPERTY("refresh", &BLESmartDeviceManager::setRefresh)
+BEEEON_OBJECT_PROPERTY("numberOfExaminationThreads", &BLESmartDeviceManager::setNumberOfExaminationThreads)
 BEEEON_OBJECT_PROPERTY("attemptsCount", &BLESmartDeviceManager::setAttemptsCount)
 BEEEON_OBJECT_PROPERTY("retryTimeout", &BLESmartDeviceManager::setRetryTimeout)
 BEEEON_OBJECT_END(BeeeOn, BLESmartDeviceManager)
@@ -47,12 +49,18 @@ BLESmartDeviceManager::BLESmartDeviceManager():
 	}),
 	m_scanTimeout(10 * Timespan::SECONDS),
 	m_deviceTimeout(5 * Timespan::SECONDS),
-	m_refresh(30 * Timespan::SECONDS)
+	m_refresh(RefreshTime::fromSeconds(30)),
+	m_numberOfExaminationThreads(3)
 {
 	m_watchCallback = new HciInterface::WatchCallback(
 		[&](const MACAddress& address, vector<unsigned char>& data) {
 			processAsyncData(address, data);
 		});
+}
+
+void BLESmartDeviceManager::setDevicePoller(DevicePoller::Ptr poller)
+{
+	m_pollingKeeper.setDevicePoller(poller);
 }
 
 void BLESmartDeviceManager::setScanTimeout(const Timespan &timeout)
@@ -76,7 +84,16 @@ void BLESmartDeviceManager::setRefresh(const Timespan &refresh)
 	if (refresh.totalSeconds() <= 0)
 		throw InvalidArgumentException("refresh time must at least a second");
 
-	m_refresh = refresh;
+	m_refresh = RefreshTime::fromSeconds(refresh.totalSeconds());
+}
+
+void BLESmartDeviceManager::setNumberOfExaminationThreads(
+		const int numberOfExaminationThreads)
+{
+	if (numberOfExaminationThreads <= 0)
+		throw InvalidArgumentException("number of examination threads must be at least one");
+
+	m_numberOfExaminationThreads = numberOfExaminationThreads;
 }
 
 void BLESmartDeviceManager::setHciManager(HciInterfaceManager::Ptr manager)
@@ -91,14 +108,22 @@ void BLESmartDeviceManager::dongleAvailable()
 	m_hci = m_hciManager->lookup(dongleName());
 
 	while (!m_stopControl.shouldStop()) {
-		Timestamp now;
+		seekPairedDevices();
 
-		refreshPairedDevices();
+		for (auto pair : m_devices) {
+			if (!pair.second->pollable())
+				continue;
 
-		Timespan sleepTime = m_refresh - now.elapsed();
-		m_stopControl.waitStoppable(sleepTime);
+			if (deviceCache()->paired(pair.second->id()))
+				m_pollingKeeper.schedule(pair.second);
+			else
+				m_pollingKeeper.cancel(pair.second->id());
+		}
+
+		m_stopControl.waitStoppable(m_refresh);
 	}
 
+	m_pollingKeeper.cancelAll();
 	logger().information("stopping BLE Smart device manager", __FILE__, __LINE__);
 }
 
@@ -128,41 +153,6 @@ bool BLESmartDeviceManager::dongleMissing()
 {
 	eraseAllDevices();
 	return true;
-}
-
-void BLESmartDeviceManager::refreshPairedDevices()
-{
-	vector<BLESmartDevice::Ptr> devices;
-	set<DeviceID> notFoundDevices;
-	m_hci->up();
-
-	ScopedLockWithUnlock<FastMutex> lock(m_devicesMutex);
-	for (auto &id : deviceCache()->paired(prefix())) {
-		auto it = m_devices.find(id);
-		if (it == m_devices.end())
-			notFoundDevices.insert(id);
-		else
-			devices.push_back(it->second);
-	}
-	lock.unlock();
-
-	if (notFoundDevices.size() > 0)
-		seekPairedDevices(notFoundDevices, devices);
-
-	for (auto &device : devices) {
-		try {
-			ship(device->requestState(m_hci));
-		}
-		catch (const NotImplementedException& e) {
-			// Some devices do not support getting the actual values.
-			continue;
-		}
-		catch (const Exception& e) {
-			logger().log(e, __FILE__, __LINE__);
-			logger().warning("failed to obtain data from device " + device->deviceID().toString(),
-				__FILE__, __LINE__);
-		}
-	}
 }
 
 void BLESmartDeviceManager::eraseAllDevices()
@@ -195,8 +185,10 @@ AsyncWork<set<DeviceID>>::Ptr BLESmartDeviceManager::startUnpair(
 		deviceCache()->markUnpaired(id);
 
 		auto it = m_devices.find(id);
-		if (it != m_devices.end())
+		if (it != m_devices.end()) {
+			m_pollingKeeper.cancel(id);
 			m_devices.erase(id);
+		}
 
 		work->setResult({id});
 	}
@@ -212,7 +204,9 @@ void BLESmartDeviceManager::handleAccept(const DeviceAcceptCommand::Ptr cmd)
 	if (it == m_devices.end())
 		throw NotFoundException("accept: " + cmd->deviceID().toString());
 
-	it->second->pair(m_hci, m_watchCallback);
+	it->second->pair(m_watchCallback);
+	if (it->second->pollable())
+		m_pollingKeeper.schedule(it->second);
 
 	DeviceManager::handleAccept(cmd);
 }
@@ -230,7 +224,7 @@ AsyncWork<double>::Ptr BLESmartDeviceManager::startSetValue(
 		throw NotFoundException("set-value: " + id.toString());
 
 	m_hci->up();
-	it->second->requestModifyState(module, value, m_hci);
+	it->second->requestModifyState(module, value);
 
 	if (logger().debug()) {
 		logger().debug("success to change state of device " + id.toString(),
@@ -267,12 +261,25 @@ void BLESmartDeviceManager::processAsyncData(
 	}
 }
 
-void BLESmartDeviceManager::seekPairedDevices(
-		const set<DeviceID> pairedDevices,
-		vector<BLESmartDevice::Ptr>& devices)
+void BLESmartDeviceManager::seekPairedDevices()
 {
+	set<DeviceID> pairedDevices;
+	ScopedLockWithUnlock<FastMutex> lock(m_devicesMutex);
+	for (auto &id : deviceCache()->paired(prefix())) {
+		auto it = m_devices.find(id);
+		if (it == m_devices.end())
+			pairedDevices.insert(id);
+		else
+			it->second->pair(m_watchCallback);
+	}
+	lock.unlock();
+
+	if (pairedDevices.size() <= 0)
+		return;
+
 	logger().information("discovering of paired BLE devices...", __FILE__, __LINE__);
 
+	m_hci->up();
 	map<MACAddress, string> foundDevices = m_hci->lescan(m_scanTimeout);
 
 	for (const auto &device : foundDevices) {
@@ -286,7 +293,7 @@ void BLESmartDeviceManager::seekPairedDevices(
 		BLESmartDevice::Ptr newDevice;
 		try {
 			newDevice = createDevice(device.first);
-			newDevice->pair(m_hci, m_watchCallback);
+			newDevice->pair(m_watchCallback);
 		}
 		catch (const Exception& e) {
 			logger().log(e, __FILE__, __LINE__);
@@ -294,10 +301,9 @@ void BLESmartDeviceManager::seekPairedDevices(
 		}
 
 		ScopedLock<FastMutex> lock(m_devicesMutex);
-		m_devices.emplace(newDevice->deviceID(), newDevice);
-		devices.push_back(newDevice);
+		m_devices.emplace(newDevice->id(), newDevice);
 
-		logger().information("found " + newDevice->productName() + " " + newDevice->deviceID().toString(),
+		logger().information("found " + newDevice->productName() + " " + newDevice->id().toString(),
 			__FILE__, __LINE__);
 	}
 }
@@ -314,19 +320,82 @@ void BLESmartDeviceManager::seekDevices(vector<BLESmartDevice::Ptr>& foundDevice
 	logger().information("found " + to_string(devices.size()) + " BLE device(s)",
 		__FILE__, __LINE__);
 
+	// Only a new devices are examined.
+	ScopedLockWithUnlock<FastMutex> lock(m_devicesMutex);
+	map<MACAddress, string> newDevices;
+	for (const auto &device : devices) {
+		auto it = m_devices.find(DeviceID(DevicePrefix::PREFIX_BLE_SMART, device.first));
+		if (it != m_devices.end())
+			foundDevices.emplace_back(it->second);
+		else
+			newDevices.emplace(device);
+	}
+	lock.unlock();
+
+	FastMutex foundDevicesMutex;
+	if (newDevices.size() <= 1) {
+		examineBatchOfDevices(
+			newDevices,
+			foundDevicesMutex,
+			foundDevices,
+			stop);
+	}
+	else {
+		threadedExaminationOfDevices(
+			newDevices,
+			foundDevicesMutex,
+			foundDevices,
+			stop);
+	}
+}
+
+void BLESmartDeviceManager::threadedExaminationOfDevices(
+		const map<MACAddress, string>& devices,
+		FastMutex& foundDevicesMutex,
+		vector<BLESmartDevice::Ptr>& foundDevices,
+		const StopControl& stop)
+{
+	uint32_t numberOfThreads = m_numberOfExaminationThreads;
+	if (devices.size() < m_numberOfExaminationThreads)
+		numberOfThreads = devices.size();
+
+	vector<map<MACAddress, string>> splitDevices(numberOfThreads);
+	vector<SharedPtr<Thread>> threads;
+
+	uint32_t i = 0;
+	for (const auto &device : devices) {
+		splitDevices.at(i % numberOfThreads).emplace(device);
+		i++;
+	}
+
+	for (const auto &batchDevices : splitDevices) {
+		SharedPtr<Thread> thread = new Thread;
+		threads.push_back(thread);
+
+		thread->startFunc(
+			[&]() {
+				examineBatchOfDevices(
+					batchDevices,
+					foundDevicesMutex,
+					foundDevices,
+					stop);
+			}
+		);
+	}
+
+	for (auto thread : threads)
+		thread->join();
+}
+
+void BLESmartDeviceManager::examineBatchOfDevices(
+		const map<MACAddress, string>& devices,
+		FastMutex& foundDevicesMutex,
+		vector<BLESmartDevice::Ptr>& foundDevices,
+		const StopControl& stop)
+{
 	for (const auto &device : devices) {
 		if (stop.shouldStop())
 			break;
-
-		ScopedLockWithUnlock<FastMutex> lock(m_devicesMutex);
-		auto it = m_devices.find(DeviceID(DevicePrefix::PREFIX_BLE_SMART, device.first));
-		if (it != m_devices.end()) {
-			foundDevices.push_back(it->second);
-			logger().information("found " + device.second + " " + it->first.toString(),
-				__FILE__, __LINE__);
-			continue;
-		}
-		lock.unlock();
 
 		BLESmartDevice::Ptr newDevice;
 		try {
@@ -340,9 +409,11 @@ void BLESmartDeviceManager::seekDevices(vector<BLESmartDevice::Ptr>& foundDevice
 			logger().log(e, __FILE__, __LINE__);
 			continue;
 		}
+
+		ScopedLock<FastMutex> guard(foundDevicesMutex);
 		foundDevices.push_back(newDevice);
 
-		logger().information("found " + newDevice->productName() + " " + newDevice->deviceID().toString(),
+		logger().information("found " + newDevice->productName() + " " + newDevice->id().toString(),
 			__FILE__, __LINE__);
 	}
 }
@@ -364,19 +435,19 @@ BLESmartDevice::Ptr BLESmartDeviceManager::createDevice(const MACAddress& addres
 
 	string modelID = {modelIDRaw.begin(), modelIDRaw.end()};
 	if (BeeWiSmartClim::match(modelID))
-		newDevice = new BeeWiSmartClim(address, m_deviceTimeout);
+		newDevice = new BeeWiSmartClim(address, m_deviceTimeout, m_refresh, m_hci);
 	else if (BeeWiSmartMotion::match(modelID))
-		newDevice = new BeeWiSmartMotion(address, m_deviceTimeout, conn);
+		newDevice = new BeeWiSmartMotion(address, m_deviceTimeout, m_refresh, m_hci, conn);
 	else if (BeeWiSmartDoor::match(modelID))
-		newDevice = new BeeWiSmartDoor(address, m_deviceTimeout, conn);
+		newDevice = new BeeWiSmartDoor(address, m_deviceTimeout, m_refresh, m_hci, conn);
 	else if (BeeWiSmartWatt::match(modelID))
-		newDevice = new BeeWiSmartWatt(address, m_deviceTimeout, conn);
+		newDevice = new BeeWiSmartWatt(address, m_deviceTimeout, m_refresh, m_hci, conn);
 	else if (BeeWiSmartLite::match(modelID))
-		newDevice = new BeeWiSmartLite(address, m_deviceTimeout);
+		newDevice = new BeeWiSmartLite(address, m_deviceTimeout, m_refresh, m_hci);
 	else if (TabuLumenSmartLite::match(modelID))
-		newDevice = new TabuLumenSmartLite(address, m_deviceTimeout);
+		newDevice = new TabuLumenSmartLite(address, m_deviceTimeout, m_refresh, m_hci);
 	else if (RevogiDevice::match(modelID))
-		newDevice = RevogiDevice::createDevice(address, m_deviceTimeout, conn);
+		newDevice = RevogiDevice::createDevice(address, m_deviceTimeout, m_refresh, m_hci, conn);
 	else
 		throw NotFoundException("device " + modelID + "not supported");
 
@@ -387,21 +458,24 @@ void BLESmartDeviceManager::processNewDevice(BLESmartDevice::Ptr newDevice)
 {
 	ScopedLock<FastMutex> lock(m_devicesMutex);
 
-	auto it = m_devices.emplace(newDevice->deviceID(), newDevice);
-	if (!it.second)
+	m_devices.emplace(newDevice->id(), newDevice);
+	if (deviceCache()->paired(newDevice->id()))
 		return;
 
-	logger().debug("found device " + newDevice->deviceID().toString(),
+	logger().debug("found device " + newDevice->id().toString(),
 		__FILE__, __LINE__);
 
 	auto types = newDevice->moduleTypes();
-	dispatch(
-		new NewDeviceCommand(
-			newDevice->deviceID(),
-			newDevice->vendor(),
-			newDevice->productName(),
-			types,
-			m_refresh));
+
+	const auto description = DeviceDescription::Builder()
+		.id(newDevice->id())
+		.type(newDevice->vendor(), newDevice->productName())
+		.modules(types)
+		.refreshTime(m_refresh)
+		.macAddress(newDevice->macAddress())
+		.build();
+
+	dispatch(new NewDeviceCommand(description));
 }
 
 BLESmartDeviceManager::BLESmartSeeker::BLESmartSeeker(

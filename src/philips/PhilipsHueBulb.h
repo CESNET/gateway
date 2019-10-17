@@ -6,6 +6,7 @@
 #include <Poco/Mutex.h>
 #include <Poco/SharedPtr.h>
 
+#include "core/PollableDevice.h"
 #include "model/DeviceID.h"
 #include "model/ModuleID.h"
 #include "model/ModuleType.h"
@@ -19,7 +20,7 @@ namespace BeeeOn {
 /**
  * @brief Abstract class representing generic Philips Hue bulb.
  */
-class PhilipsHueBulb : protected Loggable {
+class PhilipsHueBulb : public PollableDevice, protected Loggable {
 public:
 	typedef Poco::SharedPtr<PhilipsHueBulb> Ptr;
 
@@ -29,13 +30,18 @@ public:
 	 * @brief The DeviceID is created based on a bulb's 64-bit identifier,
 	 * where DevicePrefix is given on 8th byte.
 	 */
-	PhilipsHueBulb(const uint32_t ordinalNumber, const PhilipsHueBridge::BulbID bulbId, const PhilipsHueBridge::Ptr bridge);
+	PhilipsHueBulb(
+		const uint32_t ordinalNumber,
+		const PhilipsHueBridge::BulbID bulbId,
+		const PhilipsHueBridge::Ptr bridge,
+		const RefreshTime &refresh);
 	~PhilipsHueBulb();
 
 	virtual bool requestModifyState(const ModuleID& moduleID, const double value) = 0;
 	virtual SensorData requestState() = 0;
 
-	DeviceID deviceID();
+	DeviceID id() const override;
+	RefreshTime refresh() const override;
 	virtual std::list<ModuleType> moduleTypes() const = 0;
 	virtual std::string name() const = 0;
 	Poco::FastMutex& lock();
@@ -43,14 +49,17 @@ public:
 	PhilipsHueBridge::Ptr bridge();
 	PhilipsHueBulbInfo info();
 
+	void poll(Distributor::Ptr distributor) override;
+
 protected:
 	int dimToPercentage(const double value);
 	int dimFromPercentage(const double percents);
 
 protected:
-	DeviceID m_deviceID;
+	const DeviceID m_deviceID;
 	uint32_t m_ordinalNumber;
 	PhilipsHueBridge::Ptr m_bridge;
+	RefreshTime m_refresh;
 };
 
 }

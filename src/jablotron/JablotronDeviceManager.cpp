@@ -86,6 +86,7 @@ JablotronDeviceManager::JablotronDeviceManager():
 		typeid(DeviceAcceptCommand),
 		typeid(DeviceUnpairCommand),
 		typeid(DeviceSetValueCommand),
+		typeid(DeviceSearchCommand),
 	}),
 	m_unpairErasesSlot(false),
 	m_pgyEnrollGap(4 * Timespan::SECONDS), // determined experimentally
@@ -543,11 +544,15 @@ void JablotronDeviceManager::newDevice(
 		const DeviceID &id,
 		const string &name,
 		const list<ModuleType> &types,
-		const Timespan &refreshTime)
+		const RefreshTime &refreshTime)
 {
-	NewDeviceCommand::Ptr cmd = new NewDeviceCommand(
-		id, "Jablotron", name, types, refreshTime);
-	dispatch(cmd);
+	auto builder = DeviceDescription::Builder()
+		.id(id)
+		.type("Jablotron", name)
+		.modules(types)
+		.refreshTime(refreshTime);
+
+	dispatch(new NewDeviceCommand(builder.build()));
 }
 
 AsyncWork<>::Ptr JablotronDeviceManager::startDiscovery(const Timespan &timeout)
@@ -555,11 +560,11 @@ AsyncWork<>::Ptr JablotronDeviceManager::startDiscovery(const Timespan &timeout)
 	const Clock started;
 
 	if (!deviceCache()->paired(PGX_ID))
-		newDevice(PGX_ID, "PGX", PG_MODULES, -1);
+		newDevice(PGX_ID, "PGX", PG_MODULES, RefreshTime::NONE);
 	if (!deviceCache()->paired(PGY_ID))
-		newDevice(PGY_ID, "PGY", PG_MODULES, -1);
+		newDevice(PGY_ID, "PGY", PG_MODULES, RefreshTime::NONE);
 	if (!deviceCache()->paired(SIREN_ID))
-		newDevice(SIREN_ID, "Siren", SIREN_MODULES, -1);
+		newDevice(SIREN_ID, "Siren", SIREN_MODULES, RefreshTime::NONE);
 
 	FastMutex::ScopedLock guard(m_lock);
 
@@ -584,6 +589,50 @@ AsyncWork<>::Ptr JablotronDeviceManager::startDiscovery(const Timespan &timeout)
 		newDevice(id, gadget.info().name(),
 			gadget.info().modules, gadget.info().refreshTime);
 	}
+
+	return BlockingAsyncWork<>::instance();
+}
+
+AsyncWork<>::Ptr JablotronDeviceManager::startSearch(
+		const Timespan &timeout,
+		const uint64_t serialNumber)
+{
+	if (serialNumber > 0xffffffff) {
+		throw InvalidArgumentException(
+			"address " + to_string(serialNumber)
+			+ " is out-of range");
+	}
+
+	const uint32_t address = static_cast<uint32_t>(serialNumber);
+	const auto info = JablotronGadget::Info::resolve(address);
+	if (!info) {
+		throw InvalidArgumentException(
+			"address " + NumberFormatter::format0(address, 8)
+			+ " was not recognized");
+	}
+
+	const auto id = buildID(address);
+
+	FastMutex::ScopedLock guard(m_lock);
+
+	set<uint32_t> registered;
+	set<unsigned int> freeSlots;
+	set<unsigned int> unknownSlots;
+
+	scanSlots(registered, freeSlots, unknownSlots);
+
+	if (registered.find(address) == registered.end()) {
+		if (!freeSlots.empty()) {
+			registerGadget(freeSlots, address, timeout);
+		}
+		else {
+			logger().warning("overwriting a non-free slot...", __FILE__, __LINE__);
+			registerGadget(unknownSlots, address, timeout);
+		}
+	}
+
+	if (!deviceCache()->paired(id))
+		newDevice(id, info.name(), info.modules, info.refreshTime);
 
 	return BlockingAsyncWork<>::instance();
 }

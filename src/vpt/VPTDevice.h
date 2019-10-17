@@ -12,11 +12,14 @@
 #include <Poco/SharedPtr.h>
 #include <Poco/Timespan.h>
 
-#include "commands/NewDeviceCommand.h"
+#include "core/DeviceCache.h"
+#include "core/PollableDevice.h"
+#include "model/DeviceDescription.h"
 #include "model/DeviceID.h"
 #include "model/GatewayID.h"
 #include "model/ModuleID.h"
 #include "model/ModuleType.h"
+#include "model/RefreshTime.h"
 #include "model/SensorData.h"
 #include "net/HTTPEntireResponse.h"
 #include "util/Loggable.h"
@@ -30,7 +33,7 @@ namespace BeeeOn {
  * This means one instance of VPTDevice takes care of 5 devices. Each subdevice
  * has own DeviceID.
  */
-class VPTDevice : protected Loggable {
+class VPTDevice : public PollableDevice, protected Loggable {
 public:
 	typedef Poco::SharedPtr<VPTDevice> Ptr;
 
@@ -52,12 +55,6 @@ public:
 		SET
 	};
 
-private:
-	VPTDevice(const Poco::Net::SocketAddress& address);
-
-public:
-	VPTDevice();
-
 	/**
 	 * @brief Connects to specified address to fetch information for creating VPT Device.
 	 * If the device do not respond in specified timeout, Poco::TimeoutException is thrown.
@@ -66,16 +63,24 @@ public:
 	 * @param pingTimeout ping timeout used to obtain the IP address of gateway's interface
 	 * from which the VPT is available.
 	 * @param id Gateway id used in generating of stamp.
-	 * @return VPTDevice.
 	 */
-	static VPTDevice::Ptr buildDevice(const Poco::Net::SocketAddress& address,
-		const Poco::Timespan& httpTimeout, const Poco::Timespan& pingTimeout, const GatewayID& id);
+	VPTDevice(
+		const Poco::Net::SocketAddress& address,
+		const Poco::Timespan& httpTimeout,
+		const Poco::Timespan& pingTimeout,
+		const GatewayID& id,
+		const RefreshTime& refresh,
+		const DeviceCache::Ptr deviceCache);
 
+	DeviceID id() const override;
+	RefreshTime refresh() const override;
 	DeviceID boilerID() const;
 	Poco::Net::SocketAddress address() const;
 	void setAddress(const Poco::Net::SocketAddress& address);
 	void setPassword(const std::string& pwd);
 	Poco::FastMutex& lock();
+
+	void poll(Distributor::Ptr distributor) override;
 
 	/**
 	 * @brief Creates a stamp that consists of gateway id, IP address of gateway's interface
@@ -107,7 +112,7 @@ public:
 	/**
 	 * @brief Returns list of new device commands of all subdevices.
 	 */
-	std::vector<NewDeviceCommand::Ptr> createNewDeviceCommands(Poco::Timespan& refresh);
+	std::vector<DeviceDescription> descriptions(const RefreshTime& refresh) const;
 
 	/**
 	 * @brief Compares two VPTs based on DeviceID.
@@ -168,11 +173,14 @@ private:
 	Poco::Net::SocketAddress m_address;
 	std::string m_password;
 
+	RefreshTime m_refresh;
 	Poco::Timespan m_pingTimeout;
 	Poco::Timespan m_httpTimeout;
 
 	GatewayID m_gatewayID;
 	Poco::FastMutex m_lock;
+
+	DeviceCache::Ptr m_deviceCache;
 };
 
 }

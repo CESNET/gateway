@@ -44,6 +44,9 @@ find_library (MOSQUITTO_CPP mosquittopp)
 find_library (BLUETOOTH bluetooth)
 find_package(OpenZWave)
 
+find_library (LIBTRAP trap)
+find_library (UNIREC unirec)
+find_library (PCAP pcap)
 
 if(GLIB_FOUND AND GIO_UNIX_FOUND)
 	include_directories(${GIO_UNIX_INCLUDE_DIRS})
@@ -54,6 +57,7 @@ endif()
 file(GLOB TEST_SOURCES
 	${PROJECT_SOURCE_DIR}/core/AnswerQueueTest.cpp
 	${PROJECT_SOURCE_DIR}/core/CommandDispatcherTest.cpp
+	${PROJECT_SOURCE_DIR}/core/DevicePollerTest.cpp
 	${PROJECT_SOURCE_DIR}/core/DeviceStatusFetcherTest.cpp
 	${PROJECT_SOURCE_DIR}/core/DongleDeviceManagerTest.cpp
 	${PROJECT_SOURCE_DIR}/core/ExporterQueueTest.cpp
@@ -67,12 +71,16 @@ file(GLOB TEST_SOURCES
 	${PROJECT_SOURCE_DIR}/exporters/RecoverableJournalQueuingStrategyTest.cpp
 	${PROJECT_SOURCE_DIR}/util/ColorBrightnessTest.cpp
 	${PROJECT_SOURCE_DIR}/util/CSVSensorDataFormatterTest.cpp
-	${PROJECT_SOURCE_DIR}/util/DataWriterTest.cpp
-	${PROJECT_SOURCE_DIR}/util/DataReaderTest.cpp
 	${PROJECT_SOURCE_DIR}/util/JournalTest.cpp
 	${PROJECT_SOURCE_DIR}/util/JSONSensorDataFormatterTest.cpp
 	${PROJECT_SOURCE_DIR}/util/JSONSensorDataParserTest.cpp
 	${PROJECT_SOURCE_DIR}/util/XmlTypeMappingParserTest.cpp
+	${PROJECT_SOURCE_DIR}/server/AbstractGWSConnectorTest.cpp
+	${PROJECT_SOURCE_DIR}/server/MockGWSConnector.cpp
+	${PROJECT_SOURCE_DIR}/server/GWSCommandHandlerTest.cpp
+	${PROJECT_SOURCE_DIR}/server/GWSOptimisticExporterTest.cpp
+	${PROJECT_SOURCE_DIR}/server/GWSQueuingExporterTest.cpp
+	${PROJECT_SOURCE_DIR}/server/GWSResenderTest.cpp
 )
 
 if(BLUETOOTH)
@@ -84,6 +92,14 @@ if(BLUETOOTH)
 		file(GLOB DBUS_BLUEZ_SOURCES
 			${PROJECT_SOURCE_DIR}/bluetooth/GlibPtrTest.cpp
 		)
+
+		if(GLIB_LDFLAGS)
+		list(APPEND LIBS ${GLIB_LDFLAGS})
+		endif()
+
+		if(GIO_UNIX_LDFLAGS)
+		list(APPEND LIBS ${GIO_UNIX_LDFLAGS})
+		endif()
 	endif()
 
 	add_library(BeeeOnBluetoothTest ${BLUETOOTH_SOURCES} ${DBUS_BLUEZ_SOURCES})
@@ -136,7 +152,7 @@ if(FITP_LIB AND ENABLE_FITP)
 	list(APPEND TEST_MODULE_LIBS BeeeOnFitp BeeeOnFitpTest)
 endif()
 
-if(ENABLE_BLE_SMART)
+if(BLUETOOTH AND ENABLE_BLE_SMART)
 	file(GLOB BLE_SMART_TEST_SOURCES
 		${PROJECT_SOURCE_DIR}/bluetooth/BLESmartDeviceTest.cpp
 	)
@@ -144,14 +160,32 @@ if(ENABLE_BLE_SMART)
 	list(APPEND TEST_MODULE_LIBS BeeeOnBLE BeeeOnBLETest)
 endif()
 
-if (ENABLE_IQRF)
+if (ENABLE_VEKTIVA)
+	file(GLOB VEKTIVA_TEST_SOURCES
+		${PROJECT_SOURCE_DIR}/vektiva/VektivaSmarwiTest.cpp
+	)
+	add_library(BeeeOnVektivaTest ${VEKTIVA_TEST_SOURCES})
+	list(APPEND TEST_MODULE_LIBS BeeeOnVektiva BeeeOnVektivaTest)
+endif()
+
+if (ENABLE_IQRF AND MOSQUITTO_CPP)
 	file(GLOB IQRF_TEST_SOURCES
+		${PROJECT_SOURCE_DIR}/iqrf/DPAIQHomeProtocolTest.cpp
 		${PROJECT_SOURCE_DIR}/iqrf/DPAResponseTest.cpp
 		${PROJECT_SOURCE_DIR}/iqrf/DPARequestTest.cpp
 		${PROJECT_SOURCE_DIR}/iqrf/IQRFJsonMessageTest.cpp
+		${PROJECT_SOURCE_DIR}/iqrf/IQRFTypeMappingParserTest.cpp
 	)
 	add_library(BeeeOnIQRFTest ${IQRF_TEST_SOURCES})
-	list(APPEND TEST_MODULE_LIBS BeeeOnIQRF BeeeOnIQRFTest)
+	list(APPEND TEST_MODULE_LIBS BeeeOnIQRF BeeeOnIQRFTest BeeeOnMosquitto)
+endif()
+
+if(LIBTRAP AND UNIREC AND PCAP AND ENABLE_NEMEA)
+	list(APPEND LIBS
+		${PCAP}
+		${UNIREC}
+		${LIBTRAP}
+	)
 endif()
 
 include_directories(
@@ -172,14 +206,6 @@ endif()
 
 if (UDEV)
 list(APPEND LIBS ${UDEV})
-endif()
-
-if(GLIB_LDFLAGS)
-list(APPEND LIBS ${GLIB_LDFLAGS})
-endif()
-
-if(GIO_UNIX_LDFLAGS)
-list(APPEND LIBS ${GIO_UNIX_LDFLAGS})
 endif()
 
 target_link_libraries(test-suite-gateway

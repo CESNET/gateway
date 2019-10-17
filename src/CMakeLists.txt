@@ -47,13 +47,17 @@ find_library (MOSQUITTO_CPP mosquittopp)
 find_library (BLUETOOTH bluetooth)
 find_package(OpenZWave)
 
+find_library (LIBTRAP trap)
+find_library (UNIREC unirec)
+find_library (PCAP pcap)
+
 if(GLIB_FOUND AND GIO_UNIX_FOUND AND GDBUS_CODEGEN AND BLUEZ_FOUND)
 	include_directories(${GIO_UNIX_INCLUDE_DIRS})
 	include_directories(${GLIB_INCLUDE_DIRS})
 	set(HAS_DBUS_BLUEZ YES)
 endif()
 
-if(ENABLE_BLUETOOTH_AVAILABILITY OR ENABLE_BLE_SMART)
+if(ENABLE_BLUETOOTH_AVAILABILITY OR ENABLE_BLE_SMART OR ENABLE_HCI_INFO_REPORTER)
 	set(WANTS_BLUETOOTH YES)
 endif()
 
@@ -89,6 +93,7 @@ file(GLOB SOURCES
 	${PROJECT_SOURCE_DIR}/bluetooth/HciListener.cpp
 	${PROJECT_SOURCE_DIR}/commands/DeviceAcceptCommand.cpp
 	${PROJECT_SOURCE_DIR}/commands/DeviceSetValueCommand.cpp
+	${PROJECT_SOURCE_DIR}/commands/DeviceSearchCommand.cpp
 	${PROJECT_SOURCE_DIR}/commands/DeviceUnpairCommand.cpp
 	${PROJECT_SOURCE_DIR}/commands/DeviceUnpairResult.cpp
 	${PROJECT_SOURCE_DIR}/commands/GatewayListenCommand.cpp
@@ -111,6 +116,7 @@ file(GLOB SOURCES
 	${PROJECT_SOURCE_DIR}/core/CommandSender.cpp
 	${PROJECT_SOURCE_DIR}/core/DeviceCache.cpp
 	${PROJECT_SOURCE_DIR}/core/DeviceManager.cpp
+	${PROJECT_SOURCE_DIR}/core/DevicePoller.cpp
 	${PROJECT_SOURCE_DIR}/core/DeviceStatusFetcher.cpp
 	${PROJECT_SOURCE_DIR}/core/DeviceStatusHandler.cpp
 	${PROJECT_SOURCE_DIR}/core/Distributor.cpp
@@ -124,6 +130,8 @@ file(GLOB SOURCES
     ${PROJECT_SOURCE_DIR}/core/LoggingCollector.cpp
     ${PROJECT_SOURCE_DIR}/core/NemeaCollector.cpp
 	${PROJECT_SOURCE_DIR}/core/MemoryDeviceCache.cpp
+	${PROJECT_SOURCE_DIR}/core/PollableDevice.cpp
+	${PROJECT_SOURCE_DIR}/core/PollingKeeper.cpp
 	${PROJECT_SOURCE_DIR}/core/PrefixCommand.cpp
 	${PROJECT_SOURCE_DIR}/core/Result.cpp
 	${PROJECT_SOURCE_DIR}/core/QueuingDistributor.cpp
@@ -136,6 +144,7 @@ file(GLOB SOURCES
 	${PROJECT_SOURCE_DIR}/credentials/PinCredentials.cpp
 	${PROJECT_SOURCE_DIR}/exporters/InMemoryQueuingStrategy.cpp
 	${PROJECT_SOURCE_DIR}/exporters/JournalQueuingStrategy.cpp
+	${PROJECT_SOURCE_DIR}/exporters/MqttExporter.cpp
 	${PROJECT_SOURCE_DIR}/exporters/NamedPipeExporter.cpp
 	${PROJECT_SOURCE_DIR}/exporters/QueuingStrategy.cpp
 	${PROJECT_SOURCE_DIR}/exporters/RecoverableJournalQueuingStrategy.cpp
@@ -144,6 +153,7 @@ file(GLOB SOURCES
 	${PROJECT_SOURCE_DIR}/hotplug/HotplugListener.cpp
 	${PROJECT_SOURCE_DIR}/hotplug/PipeHotplugMonitor.cpp
 	${PROJECT_SOURCE_DIR}/net/AbstractHTTPScanner.cpp
+	${PROJECT_SOURCE_DIR}/net/MqttClient.cpp
 	${PROJECT_SOURCE_DIR}/net/MqttMessage.cpp
 	${PROJECT_SOURCE_DIR}/net/SOAPMessage.cpp
 	${PROJECT_SOURCE_DIR}/net/UPnP.cpp
@@ -154,12 +164,21 @@ file(GLOB SOURCES
 	${PROJECT_SOURCE_DIR}/server/GWSOutputQueue.cpp
 	${PROJECT_SOURCE_DIR}/server/GWServerConnector.cpp
 	${PROJECT_SOURCE_DIR}/server/ServerAnswer.cpp
+	${PROJECT_SOURCE_DIR}/server/AbstractGWSConnector.cpp
+	${PROJECT_SOURCE_DIR}/server/GWSCommandHandler.cpp
+	${PROJECT_SOURCE_DIR}/server/GWSCommandSender.cpp
+	${PROJECT_SOURCE_DIR}/server/GWSConnector.cpp
+	${PROJECT_SOURCE_DIR}/server/GWSConnectorImpl.cpp
+	${PROJECT_SOURCE_DIR}/server/GWSFixedPriorityAssigner.cpp
+	${PROJECT_SOURCE_DIR}/server/GWSListener.cpp
+	${PROJECT_SOURCE_DIR}/server/GWSOptimisticExporter.cpp
+	${PROJECT_SOURCE_DIR}/server/GWSPriorityAssigner.cpp
+	${PROJECT_SOURCE_DIR}/server/GWSQueuingExporter.cpp
+	${PROJECT_SOURCE_DIR}/server/GWSResender.cpp
 	${PROJECT_SOURCE_DIR}/util/ChecksumSensorDataFormatter.cpp
 	${PROJECT_SOURCE_DIR}/util/ChecksumSensorDataParser.cpp
 	${PROJECT_SOURCE_DIR}/util/ColorBrightness.cpp
 	${PROJECT_SOURCE_DIR}/util/CSVSensorDataFormatter.cpp
-	${PROJECT_SOURCE_DIR}/util/DataReader.cpp
-	${PROJECT_SOURCE_DIR}/util/DataWriter.cpp
 	${PROJECT_SOURCE_DIR}/util/Journal.cpp
 	${PROJECT_SOURCE_DIR}/util/JSONSensorDataFormatter.cpp
 	${PROJECT_SOURCE_DIR}/util/JSONSensorDataParser.cpp
@@ -195,6 +214,18 @@ else()
 	message(STATUS "Belkin Wemo support is disabled")
 endif()
 
+if(ENABLE_VEKTIVA)
+    file(GLOB VEKTIVA_SOURCES
+		${PROJECT_SOURCE_DIR}/vektiva/VektivaDeviceManager.cpp
+		${PROJECT_SOURCE_DIR}/vektiva/VektivaSmarwi.cpp
+		${PROJECT_SOURCE_DIR}/vektiva/VektivaSmarwiStatus.cpp
+	)
+    add_library(BeeeOnVektiva ${VEKTIVA_SOURCES})
+    list(APPEND MODULE_LIBS BeeeOnVektiva)
+else()
+    message(STATUS "Vektiva support is disabled")
+endif()
+
 if(BLUETOOTH AND WANTS_BLUETOOTH)
 	file(GLOB BLUETOOTH_SOURCES
 		${PROJECT_SOURCE_DIR}/bluetooth/BluezHciInterface.cpp
@@ -206,6 +237,9 @@ if(BLUETOOTH AND WANTS_BLUETOOTH)
 		${PROJECT_SOURCE_DIR}/bluetooth/HciInterface.cpp
 		${PROJECT_SOURCE_DIR}/bluetooth/HciUtil.cpp
 	)
+
+	list(APPEND LIBS ${BLUETOOTH})
+
 	if(HAS_DBUS_BLUEZ)
 		list(APPEND BLUETOOTH_SOURCES
 			${PROJECT_BINARY_DIR}/bluetooth/org-bluez-adapter1.c
@@ -218,6 +252,14 @@ if(BLUETOOTH AND WANTS_BLUETOOTH)
 			${PROJECT_BINARY_DIR}/bluetooth/org-bluez-gattcharacteristic1.c
 			PROPERTIES COMPILE_FLAGS "-Wno-unused-parameter -Wno-pedantic"
 		)
+
+		if(GLIB_LDFLAGS)
+			list(APPEND LIBS ${GLIB_LDFLAGS})
+		endif()
+
+		if(GIO_UNIX_LDFLAGS)
+			list(APPEND LIBS ${GIO_UNIX_LDFLAGS})
+		endif()
 	endif()
 	add_library(BeeeOnBluetooth ${BLUETOOTH_SOURCES})
 	list(APPEND MODULE_LIBS BeeeOnBluetooth)
@@ -356,7 +398,6 @@ endif()
 
 if(MOSQUITTO_CPP)
 	file(GLOB MOSQUITTO_SUPPORT_SOURCES
-		${PROJECT_SOURCE_DIR}/exporters/MosquittoExporter.cpp
 		${PROJECT_SOURCE_DIR}/net/GatewayMosquittoClient.cpp
 		${PROJECT_SOURCE_DIR}/net/MosquittoClient.cpp
 	)
@@ -401,12 +442,20 @@ endif()
 
 if (ENABLE_IQRF)
 	file(GLOB IQRF_SOURCES
+		${PROJECT_SOURCE_DIR}/iqrf/DPAIQHomeProtocol.cpp
+		${PROJECT_SOURCE_DIR}/iqrf/DPAMappedProtocol.cpp
 		${PROJECT_SOURCE_DIR}/iqrf/DPAMessage.cpp
+		${PROJECT_SOURCE_DIR}/iqrf/DPAProtocol.cpp
 		${PROJECT_SOURCE_DIR}/iqrf/DPARequest.cpp
 		${PROJECT_SOURCE_DIR}/iqrf/DPAResponse.cpp
+		${PROJECT_SOURCE_DIR}/iqrf/IQRFDevice.cpp
+		${PROJECT_SOURCE_DIR}/iqrf/IQRFDeviceManager.cpp
 		${PROJECT_SOURCE_DIR}/iqrf/IQRFJsonMessage.cpp
 		${PROJECT_SOURCE_DIR}/iqrf/IQRFJsonRequest.cpp
 		${PROJECT_SOURCE_DIR}/iqrf/IQRFJsonResponse.cpp
+		${PROJECT_SOURCE_DIR}/iqrf/IQRFMqttConnector.cpp
+		${PROJECT_SOURCE_DIR}/iqrf/IQRFTypeMappingParser.cpp
+		${PROJECT_SOURCE_DIR}/iqrf/IQRFUtil.cpp
 		${PROJECT_SOURCE_DIR}/iqrf/request/DPACoordBondNodeRequest.cpp
 		${PROJECT_SOURCE_DIR}/iqrf/request/DPACoordBondedNodesRequest.cpp
 		${PROJECT_SOURCE_DIR}/iqrf/request/DPACoordClearAllBondsRequest.cpp
@@ -427,6 +476,22 @@ else()
 	message(STATUS "IQRF support is disabled")
 endif()
 
+if(LIBTRAP AND UNIREC AND PCAP AND ENABLE_NEMEA)
+	file(GLOB NEMEA_SOURCES
+		${PROJECT_SOURCE_DIR}/nemea/fields.cpp
+		${PROJECT_SOURCE_DIR}/nemea/NemeaCollector.cpp
+	)
+	list(APPEND LIBS
+		${PCAP}
+		${UNIREC}
+		${LIBTRAP}
+	)
+	add_library(BeeeOnNemea ${NEMEA_SOURCES})
+	list(APPEND MODULE_LIBS BeeeOnNemea)
+else()
+	message(STATUS "Nemea features support is disabled")
+endif()
+
 configure_file(core/Version.cpp.in ${PROJECT_BINARY_DIR}/core/Version.cpp)
 list(APPEND SOURCES ${PROJECT_BINARY_DIR}/core/Version.cpp)
 
@@ -438,18 +503,6 @@ include_directories(
 add_library(BeeeOnGateway ${SOURCES})
 
 add_executable(beeeon-gateway main.cpp)
-
-if(BLUETOOTH)
-list(APPEND LIBS ${BLUETOOTH})
-endif()
-
-if(GLIB_LDFLAGS)
-list(APPEND LIBS ${GLIB_LDFLAGS})
-endif()
-
-if(GIO_UNIX_LDFLAGS)
-list(APPEND LIBS ${GIO_UNIX_LDFLAGS})
-endif()
 
 target_link_libraries(beeeon-gateway
 		-Wl,--whole-archive

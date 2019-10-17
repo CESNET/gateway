@@ -4,8 +4,10 @@
 #include <Poco/NumberFormatter.h>
 #include <Poco/NumberParser.h>
 #include <Poco/StringTokenizer.h>
+#include <Poco/Net/IPAddress.h>
 
 #include "commands/DeviceAcceptCommand.h"
+#include "commands/DeviceSearchCommand.h"
 #include "commands/DeviceSetValueCommand.h"
 #include "commands/DeviceUnpairCommand.h"
 #include "commands/GatewayListenCommand.h"
@@ -21,6 +23,8 @@
 #include "credentials/PinCredentials.h"
 #include "di/Injectable.h"
 #include "model/ModuleType.h"
+#include "model/RefreshTime.h"
+#include "net/MACAddress.h"
 #include "util/ArgsParser.h"
 
 BEEEON_OBJECT_BEGIN(BeeeOn, TestingCenter)
@@ -36,6 +40,7 @@ BEEEON_OBJECT_END(BeeeOn, TestingCenter)
 using namespace std;
 using namespace Poco;
 using namespace Poco::Crypto;
+using namespace Poco::Net;
 using namespace BeeeOn;
 
 static string identifyAnswer(const Answer::Ptr p)
@@ -85,10 +90,15 @@ static Command::Ptr parseCommand(TestingCenter::ActionContext &context)
 		if (args.size() >= 6)
 			timeout = Timespan(NumberParser::parse(args[5]) * Timespan::MILLISECONDS);
 
+		OpMode mode = OpMode::TRY_ONCE;
+		if (args.size() >= 7)
+			mode = OpMode::parse(args[6]);
+
 		return new DeviceSetValueCommand(
 			DeviceID::parse(args[2]),
 			ModuleID::parse(args[3]),
 			NumberParser::parseFloat(args[4]),
+			mode,
 			timeout
 		);
 	}
@@ -100,6 +110,23 @@ static Command::Ptr parseCommand(TestingCenter::ActionContext &context)
 			duration = Timespan(NumberParser::parse(args[2]) * Timespan::SECONDS);
 
 		return new GatewayListenCommand(duration);
+	}
+	else if (args[1] == "search") {
+		assureArgs(context, 4, "command search");
+
+		Timespan timeout(5 * Timespan::SECONDS);
+		if (args.size() > 5)
+			timeout = Timespan(NumberParser::parse(args[5]) * Timespan::SECONDS);
+
+		const auto prefix = DevicePrefix::parse(args[2]);
+		if (args[3] == "ip")
+			return new DeviceSearchCommand(prefix, {IPAddress::parse(args[4])}, timeout);
+		if (args[3] == "mac")
+			return new DeviceSearchCommand(prefix, {MACAddress::parse(args[4])}, timeout);
+		if (args[3] == "serial")
+			return new DeviceSearchCommand(prefix, {NumberParser::parseUnsigned(args[4])}, timeout);
+
+		throw InvalidArgumentException("unknown search type: " + args[3]);
 	}
 	else if (args[1] == "list-devices") {
 		assureArgs(context, 3, "command list-devices");
@@ -130,13 +157,14 @@ static Command::Ptr parseCommand(TestingCenter::ActionContext &context)
 		for (unsigned int i = 6; i < context.args.size(); i++)
 			moduleTypes.push_back(ModuleType::parse(args[i]));
 
-		return new NewDeviceCommand(
-			DeviceID::parse(args[2]),
-			args[3],
-			args[4],
-			moduleTypes,
-			NumberParser::parse(args[5])
-		);
+		const auto description = DeviceDescription::Builder()
+			.id(DeviceID::parse(args[2]))
+			.type(args[3], args[4])
+			.modules(moduleTypes)
+			.refreshTime(RefreshTime::parse(args[5]))
+			.build();
+
+		return new NewDeviceCommand(description);
 	}
 	else if (args[1] == "device-accept") {
 		assureArgs(context, 3, "command device-accept");
@@ -165,8 +193,9 @@ static void commandAction(TestingCenter::ActionContext &context)
 		console.print("usage: command <name> [<args>...]");
 		console.print("names:");
 		console.print("  unpair <device-id>");
-		console.print("  set-value <device-id> <module-id> <value> [<timeout>]");
+		console.print("  set-value <device-id> <module-id> <value> [<timeout> [<mode>]]");
 		console.print("  listen [<timeout>]");
+		console.print("  search <device-prefix> ip|mac|serial <criteria> [<timeout>]");
 		console.print("  list-devices <device-prefix>");
 		console.print("  last-value <device-id> <module-id>");
 		console.print("  new-device <device-id> <vendor> <product-name> <refresh-time> "

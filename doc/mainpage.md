@@ -235,7 +235,7 @@ that is controlled via a named pipe from some external sources.
 
 * exporter.pipe.format - output format (available: CSV, JSON)
 
-* exporter.mqtt.enable - enable the MosquittoExporter to be registered with the Distributor
+* exporter.mqtt.enable - enable the MqttExporter to be registered with the Distributor
 
 * exporter.mqtt.host - host where the MQTT broker is running
 
@@ -264,6 +264,12 @@ After the initial setup, we have full control over all currently supported devic
 
 * belkinwemo.refresh - interval of polling the particular Belkin Wemo devices (seconds)
 
+##### Bluetooth DBus HCI configuration
+
+* bluetooth.le.maxAgeRssi - the time after which a Bluetooth LE device that is unavailable would be declared as unavailable
+
+* bluetooth.classic.artificialAvaibilityTimeout - the time after which a Bluetooth Classic device that is unavailable would be declared as unavailable
+
 ##### Bluetooth HCI statistics reporting
 
 The BeeeOn Gateway can periodically report statistics of HCI interfaces via the internal
@@ -284,7 +290,33 @@ is available or unavailable, such event is distributed.
 
 * bluetooth.availability.refresh - interval of scanning the network and reporting results
 
-* bluetooth.availability.le.scan.time - time for a single LE scan when testing device availability
+* bluetooth.le.scanTime - time for a single LE scan when testing device availability
+
+##### Vektiva Smarwi
+
+Smarwi's initial set up by the BeeeOn Gateway application is not supported in
+the current version of the application. Configuration must be made by connecting
+to the access point created by Smarwi and fill in the correct credentials
+to the Wi-Fi network and specify the MQTT broker that Smarwi should connect to.
+Once Smarwi is on the same network as the BeeeOn Gateway application and
+is connected to the same broker as BeeeOn Gateway is connected to,
+the device can be controlled.
+
+* vektiva.enable - enable the Vektiva support
+
+* vektiva.subscribeTopics - topics that Vektiva's MQTT client is subscribed to
+
+* vektiva.receiveTimeout - timeout of receiving an MQTT message
+
+* vektiva.mqtt.host - the address of the MQTT broker
+
+* vektiva.mqtt.port - port of the MQTT broker
+
+* vektiva.mqtt.qos - MQTT QoS specification
+
+* vektiva.mqtt.clientID - ID of the first MQTT client
+
+* vektiva.mqtt.statusClientID - ID of the second MQTT client
 
 ##### Jablotron
 
@@ -351,8 +383,34 @@ sensor available via sysfs.
 
 * blesmart.enable - enable the BLE Smart support
 
-* blesmart.scan.timeout - timeout of the Bluetooth Low Energy scan
+* bluetooth.le.scanTimeout - timeout of the Bluetooth Low Energy scan
 
 * blesmart.device.timeout - timeout of work with the device (connect, wait to load services, read/write request)
 
 * blesmart.refresh - interval of polling the particular BLE Smart devices (seconds)
+
+#### IQRF 
+
+* iqrf.enable - enable the IQRF support
+
+* iqrf.subscribeTopic - topic where receive JSON messages from IQRF Daemon
+
+* iqrf.publishTopic - topic where to advertise JSON messages for IQRF Daemon
+
+* iqrf.receiveTimeout - timeout of IQRF DPA requests
+
+* iqrf.refreshTime - interval of obtaining measured values from IQRF devices (seconds)
+
+* iqrf.refreshTimePeripheralInfo - interval of obtaining peripheral info (RSSI, battery) from IQRF devices (seconds)
+
+* iqrf.devicesRetryTimeout - interval between attempts to communicate with IQRF devices
+
+* iqrf.coordinatorReset - controllers to be reset once connected
+
+* iqrf.mqtt.host - host where the MQTT broker is running
+
+* iqrf.mqtt.port - port where the MQTT broker is running
+
+* iqrf.mqtt.qos - MQTT QoS specification
+
+* iqrf.mqtt.clientID - name of the MQTT client

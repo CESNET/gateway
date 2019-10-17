@@ -22,19 +22,18 @@ class BelkinWemoDimmer : public BelkinWemoStandaloneDevice {
 public:
 	typedef Poco::SharedPtr<BelkinWemoDimmer> Ptr;
 
-private:
-	BelkinWemoDimmer(const Poco::Net::SocketAddress& address);
-
-public:
 	/**
 	 * @brief Creates belkin wemo dimmer. If the device do not respond in
 	 * specified timeout, Poco::TimeoutException is thrown.
 	 * @param &address IP address and port where the device is listening.
 	 * @param &timeout HTTP timeout.
 	 */
-	static BelkinWemoDimmer::Ptr buildDevice(const Poco::Net::SocketAddress& address,
-		const Poco::Timespan& timeout);
+	BelkinWemoDimmer(
+		const Poco::Net::SocketAddress& address,
+		const Poco::Timespan &httpTimeout,
+		const RefreshTime &refresh);
 
+private:
 	/**
 	 * @brief Modifies the dimmer's given module to the given value.
 	 */

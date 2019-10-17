@@ -11,12 +11,11 @@
 #include "core/PrefixCommand.h"
 #include "model/SensorData.h"
 #include "util/ClassInfo.h"
+#include "util/MultiException.h"
 
 using namespace BeeeOn;
 using namespace Poco;
 using namespace std;
-
-const Timespan DeviceManager::DEFAULT_REQUEST_TIMEOUT(5 * Timespan::SECONDS);
 
 DeviceManager::DeviceManager(const DevicePrefix &prefix,
 		const initializer_list<type_index> &acceptable):
@@ -94,6 +93,8 @@ void DeviceManager::handleGeneric(const Command::Ptr cmd, Result::Ptr result)
 		handleAccept(cmd.cast<DeviceAcceptCommand>());
 	else if (cmd->is<GatewayListenCommand>())
 		handleListen(cmd.cast<GatewayListenCommand>());
+	else if (cmd->is<DeviceSearchCommand>())
+		handleSearch(cmd.cast<DeviceSearchCommand>());
 	else if (cmd->is<DeviceUnpairCommand>()) {
 		DeviceUnpairResult::Ptr unpair = result.cast<DeviceUnpairResult>();
 		poco_assert(!unpair.isNull());
@@ -144,6 +145,58 @@ void DeviceManager::handleListen(const GatewayListenCommand::Ptr cmd)
 	manageUntilFinished("discovery", discovery, timeout);
 }
 
+AsyncWork<>::Ptr DeviceManager::startSearch(
+		const Timespan &,
+		const Poco::Net::IPAddress &)
+{
+	throw NotImplementedException("generic search-by-ip-address is not supported");
+}
+
+AsyncWork<>::Ptr DeviceManager::startSearch(
+		const Timespan &,
+		const MACAddress &)
+{
+	throw NotImplementedException("generic search-by-mac-address is not supported");
+}
+
+AsyncWork<>::Ptr DeviceManager::startSearch(
+		const Timespan &,
+		const uint64_t)
+{
+	throw NotImplementedException("generic search-by-serial-number is not supported");
+}
+
+void DeviceManager::handleSearch(const DeviceSearchCommand::Ptr cmd)
+{
+	const Clock started;
+	const Timespan &duration = cmd->duration();
+
+	if (duration < 1 * Timespan::SECONDS) {
+		throw InvalidArgumentException(
+			"search duration is too short: "
+			+ to_string(duration.totalMicroseconds()) + " us");
+	}
+
+	ScopedLock<FastMutex> guard(m_listenLock, duration.totalMilliseconds());
+
+	const Timespan &timeout = checkDelayedOperation("search", started, duration);
+
+	logger().information("starting search (" + to_string(timeout.totalSeconds()) + " s)", __FILE__, __LINE__);
+
+	AsyncWork<>::Ptr search;
+
+	if (cmd->hasIPAddress())
+		search = startSearch(timeout, cmd->ipAddress());
+	else if (cmd->hasMACAddress())
+		search = startSearch(timeout, cmd->macAddress());
+	else if (cmd->hasSerialNumber())
+		search = startSearch(timeout, cmd->serialNumber());
+	else
+		poco_assert_msg(0, "missing search criteria");
+
+	manageUntilFinished("search", search, timeout);
+}
+
 AsyncWork<set<DeviceID>>::Ptr DeviceManager::startUnpair(
 		const DeviceID &,
 		const Timespan &)
@@ -160,7 +213,7 @@ set<DeviceID> DeviceManager::handleUnpair(const DeviceUnpairCommand::Ptr cmd)
 
 	const Timespan &timeout = checkDelayedOperation("unpair", started, duration);
 
-	logger().information("starting unpair", __FILE__, __LINE__);
+	logger().information("starting unpair of " + cmd->deviceID().toString(), __FILE__, __LINE__);
 
 	auto unpair = startUnpair(cmd->deviceID(), timeout);
 	manageUntilFinished("unpair", unpair, timeout);
@@ -192,6 +245,33 @@ set<DeviceID> DeviceManager::handleUnpair(const DeviceUnpairCommand::Ptr cmd)
 	return result;
 }
 
+AsyncWork<double>::Ptr DeviceManager::startSetValueByMode(
+		const DeviceID &id,
+		const ModuleID &module,
+		const double value,
+		const OpMode &mode,
+		const Timespan &timeout)
+{
+	logger().information(
+		"starting set-value " + to_string(value)
+		+ " of " + id.toString() + " [" + module.toString() + "]"
+		+ " in mode " + mode.toString(),
+		__FILE__, __LINE__);
+
+	switch (mode.raw()) {
+	case OpMode::TRY_ONCE:
+		return startSetValue(id, module, value, timeout);
+
+	case OpMode::TRY_HARDER:
+		return startSetValueTryHarder(id, module, value, timeout);
+
+	case OpMode::REPEAT_ON_FAIL:
+		return startSetValueRepeatOnFail(id, module, value, timeout);
+	}
+
+	throw IllegalStateException("unimplemented operation mode " + mode.toString());
+}
+
 AsyncWork<double>::Ptr DeviceManager::startSetValue(
 		const DeviceID &,
 		const ModuleID &,
@@ -199,6 +279,50 @@ AsyncWork<double>::Ptr DeviceManager::startSetValue(
 		const Timespan &)
 {
 	throw NotImplementedException("generic set-value is not supported");
+}
+
+AsyncWork<double>::Ptr DeviceManager::startSetValueTryHarder(
+		const DeviceID &id,
+		const ModuleID &module,
+		const double value,
+		const Timespan &timeout)
+{
+	return startSetValue(id, module, value, timeout);
+}
+
+AsyncWork<double>::Ptr DeviceManager::startSetValueRepeatOnFail(
+		const DeviceID &id,
+		const ModuleID &module,
+		const double value,
+		const Timespan &timeout)
+{
+	const Clock started;
+	MultiException me;
+
+	while (!started.isElapsed(timeout.totalMicroseconds())) {
+		if (m_stopControl.shouldStop()) {
+			if (me.count() > 0)
+				break;
+
+			throw IllegalStateException(
+				"device manager stop has been requested during"
+				" set-value in mode repeat_on_fail");
+		}
+
+		try {
+			return startSetValue(id, module, value, timeout);
+		}
+		catch (const IOException &e) {
+			Loggable::logException(
+				logger(), Message::PRIO_WARNING, e, __FILE__, __LINE__);
+			me.caught(e);
+		}
+	}
+
+	poco_assert(me.count() > 0);
+
+	me.rethrow();
+	throw IllegalStateException("never happens");
 }
 
 void DeviceManager::handleSetValue(const DeviceSetValueCommand::Ptr cmd)
@@ -210,12 +334,11 @@ void DeviceManager::handleSetValue(const DeviceSetValueCommand::Ptr cmd)
 
 	const Timespan &timeout = checkDelayedOperation("set-value", started, duration);
 
-	logger().information("starting set-value", __FILE__, __LINE__);
-
-	auto operation = startSetValue(
+	auto operation = startSetValueByMode(
 		cmd->deviceID(),
 		cmd->moduleID(),
 		cmd->value(),
+		cmd->mode(),
 		timeout);
 	manageUntilFinished("set-value", operation, timeout);
 
@@ -287,134 +410,6 @@ bool DeviceManager::manageUntilFinished(
 		cancellable().unmanage(work);
 		return true;
 	}
-}
-
-set<DeviceID> DeviceManager::deviceList(const Poco::Timespan &timeout)
-{
-	Answer::Ptr answer = new Answer(answerQueue());
-
-	requestDeviceList(answer);
-	return responseDeviceList(timeout, answer);
-}
-
-void DeviceManager::requestDeviceList(Answer::Ptr answer)
-{
-	ServerDeviceListCommand::Ptr cmd =
-		new ServerDeviceListCommand(m_prefix);
-
-	dispatch(cmd, answer);
-}
-
-set<DeviceID> DeviceManager::responseDeviceList(
-	const Timespan &waitTime, Answer::Ptr answer)
-{
-	set<DeviceID> devices;
-	unsigned long failedResults = 0;
-
-	answer->waitNotPending(waitTime);
-	for (unsigned long i = 0; i < answer->resultsCount(); i++) {
-		if (answer->at(i)->status() != Result::Status::SUCCESS) {
-			failedResults++;
-			continue;
-		}
-
-		ServerDeviceListResult::Ptr res =
-			answer->at(i).cast<ServerDeviceListResult>();
-
-		if (res.isNull()) {
-			logger().critical(
-				"unexpected result " + ClassInfo::forPointer(answer->at(i).get()).name()
-				+ " for prefix: " + m_prefix, __FILE__, __LINE__);
-			failedResults++;
-			continue;
-		}
-
-		for (auto &id : res->deviceList()) {
-			auto ret = devices.insert(id);
-
-			if (!ret.second) {
-				logger().warning(
-					"duplicate device: " + id.toString()
-					+ " for " + m_prefix.toString(),
-					__FILE__, __LINE__);
-			}
-		}
-	}
-
-	answerQueue().remove(answer);
-
-	if (failedResults == answer->resultsCount()) {
-		throw Exception(
-			to_string(failedResults)
-			+ "/" + to_string(answer->resultsCount())
-			+ " results has failed when waiting device list for "
-			+ m_prefix.toString()
-		);
-	}
-
-	if (failedResults > 0) {
-		logger().warning(
-			to_string(failedResults)
-			+ "/" + to_string(answer->resultsCount())
-			+ " results has failed while receiving device list",
-			__FILE__, __LINE__
-		);
-	}
-
-	return devices;
-}
-
-double DeviceManager::lastValue(const DeviceID &deviceID,
-	const ModuleID &moduleID, const Timespan &waitTime)
-{
-	Answer::Ptr answer = new Answer(answerQueue());
-
-	ServerLastValueCommand::Ptr cmd =
-		new ServerLastValueCommand(deviceID, moduleID);
-
-	dispatch(cmd, answer);
-	answer->waitNotPending(waitTime);
-
-	int failedResults = 0;
-	ServerLastValueResult::Ptr result;
-
-	for (unsigned long i = 0; i < answer->resultsCount(); i++) {
-		if (answer->at(i)->status() != Result::Status::SUCCESS) {
-			failedResults++;
-			continue;
-		}
-
-		if (answer->at(i).cast<ServerLastValueResult>().isNull()) {
-			logger().critical(
-				"unexpected result " + ClassInfo::forPointer(answer->at(i).get()).name()
-				+ " for device: " + deviceID.toString(), __FILE__, __LINE__);
-			failedResults++;
-			continue;
-		}
-
-		if (result.isNull())
-			result = answer->at(i).cast<ServerLastValueResult>();
-	}
-
-	answerQueue().remove(answer);
-
-	if (result.isNull()) {
-		throw Exception(
-			"failed to obtain last value for device: "
-			+ deviceID.toString());
-	}
-
-	if (failedResults > 0) {
-		logger().warning(
-			to_string(failedResults)
-			+ "/" + to_string(answer->resultsCount())
-			+ " results has failed when waiting for last value for "
-			+ deviceID.toString(),
-			__FILE__, __LINE__
-		);
-	}
-
-	return result->value();
 }
 
 void DeviceManager::handleRemoteStatus(

@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include <Poco/SharedPtr.h>
 #include <Poco/Timespan.h>
 #include <Poco/URI.h>
 #include <Poco/Net/SocketAddress.h>
@@ -18,15 +19,12 @@ namespace BeeeOn {
  */
 class BelkinWemoStandaloneDevice : public BelkinWemoDevice {
 public:
-	BelkinWemoStandaloneDevice(const Poco::URI& uri);
+	typedef Poco::SharedPtr<BelkinWemoStandaloneDevice> Ptr;
 
-	/**
-	 * @brief Prepares SOAP message containing GetMacAddr request
-	 * and sends it to device via HTTP. If the device do not respond
-	 * in specified timeout, Poco::TimeoutException is thrown.
-	 * @return MAC address of the device.
-	 */
-	MACAddress requestMacAddr() const;
+	BelkinWemoStandaloneDevice(
+		const Poco::URI& uri,
+		const Poco::Timespan &httpTimeout,
+		const RefreshTime &refresh);
 
 	/**
 	 * @brief Prepares SOAP message containing GetBinaryState request
@@ -49,15 +47,28 @@ public:
 	Poco::Net::SocketAddress address() const;
 	void setAddress(const Poco::Net::SocketAddress& address);
 
+private:
+	/**
+	 * @brief Prepares SOAP message containing GetMacAddr request
+	 * and sends it to device via HTTP. If the device do not respond
+	 * in specified timeout, Poco::TimeoutException is thrown.
+	 * @return MAC address of the device.
+	 */
+	static MACAddress requestMacAddr(
+		const Poco::URI &uri,
+		const Poco::Timespan &httpTimeout);
+
 	/**
 	 * @brief Called internally when constructing the instance.
 	 * Creates DeviceID based on Mac address of device.
 	 */
-	void buildDeviceID();
+	static DeviceID buildDeviceID(
+		const Poco::URI& uri,
+		const Poco::Timespan& httpTimeout);
 
 protected:
 	Poco::URI m_uri;
-	Poco::Timespan m_httpTimeout;
+	const Poco::Timespan m_httpTimeout;
 };
 
 }

@@ -9,7 +9,7 @@ using namespace Poco;
 using namespace std;
 
 VirtualDevice::VirtualDevice():
-	m_refresh(5 * Timespan::SECONDS)
+	m_refresh(RefreshTime::fromSeconds(5))
 {
 }
 
@@ -17,7 +17,7 @@ VirtualDevice::~VirtualDevice()
 {
 }
 
-DeviceID VirtualDevice::deviceID() const
+DeviceID VirtualDevice::id() const
 {
 	return m_deviceID;
 }
@@ -44,7 +44,7 @@ list<VirtualModule::Ptr> VirtualDevice::modules() const
 SensorData VirtualDevice::generate()
 {
 	SensorData data;
-	data.setDeviceID(deviceID());
+	data.setDeviceID(id());
 
 	for (auto &item : m_modules) {
 		if (item->generatorEnabled())
@@ -66,21 +66,21 @@ bool VirtualDevice::modifyValue(
 	return false;
 }
 
-Timespan VirtualDevice::refresh() const
+RefreshTime VirtualDevice::refresh() const
 {
 	return m_refresh;
 }
 
-void VirtualDevice::setRefresh(Timespan refresh)
+void VirtualDevice::setRefresh(const RefreshTime &refresh)
 {
-	if (refresh == 0)
+	if (refresh.isNone() || refresh.isDisabled())
 		throw InvalidArgumentException(
-			"invalid refresh: " + to_string(refresh.totalSeconds()));
+			"invalid refresh: " + refresh.toString());
 
 	m_refresh = refresh;
 }
 
-void VirtualDevice::setDeviceId(const DeviceID &deviceId)
+void VirtualDevice::setID(const DeviceID &deviceId)
 {
 	m_deviceID = deviceId;
 }
@@ -103,4 +103,12 @@ string VirtualDevice::vendorName() const
 string VirtualDevice::productName() const
 {
 	return m_productName;
+}
+
+void VirtualDevice::poll(Distributor::Ptr distributor)
+{
+	SensorData sensorData = generate();
+
+	if (!sensorData.isEmpty())
+		distributor->exportData(sensorData);
 }

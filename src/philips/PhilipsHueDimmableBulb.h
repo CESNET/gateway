@@ -20,8 +20,11 @@ class PhilipsHueDimmableBulb : public PhilipsHueBulb {
 public:
 	typedef Poco::SharedPtr<PhilipsHueDimmableBulb> Ptr;
 
-	PhilipsHueDimmableBulb(const uint32_t ordinalNumber,
-		const PhilipsHueBridge::BulbID bulbId, const PhilipsHueBridge::Ptr bridge);
+	PhilipsHueDimmableBulb(
+		const uint32_t ordinalNumber,
+		const PhilipsHueBridge::BulbID bulbId,
+		const PhilipsHueBridge::Ptr bridge,
+		const RefreshTime &refresh);
 
 	bool requestModifyState(const ModuleID& moduleID, const double value) override;
 	SensorData requestState() override;

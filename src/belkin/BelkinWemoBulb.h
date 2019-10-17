@@ -27,7 +27,10 @@ public:
 	 * @brief The DeviceID is created based on a bulb's 64-bit identifier,
 	 * where DevicePrefix is given on 8th byte.
 	 */
-	BelkinWemoBulb(const BelkinWemoLink::BulbID bulbId, const BelkinWemoLink::Ptr link);
+	BelkinWemoBulb(
+		const BelkinWemoLink::BulbID bulbId,
+		const BelkinWemoLink::Ptr link,
+		const RefreshTime &refresh);
 	~BelkinWemoBulb();
 
 	bool requestModifyState(const ModuleID& moduleID, const double value) override;
@@ -37,9 +40,10 @@ public:
 	std::string name() const override;
 	Poco::FastMutex& lock() override;
 
-	BelkinWemoLink::Ptr link();
+	BelkinWemoLink::Ptr link() const;
 
 private:
+	static DeviceID buildDeviceID(const BelkinWemoLink::BulbID &id);
 	int dimToPercentage(const double value);
 	int dimFromPercentage(const double percents);
 

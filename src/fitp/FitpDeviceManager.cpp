@@ -14,6 +14,7 @@
 #include "di/Injectable.h"
 #include "fitp/FitpDevice.h"
 #include "fitp/FitpDeviceManager.h"
+#include "model/RefreshTime.h"
 
 BEEEON_OBJECT_BEGIN(BeeeOn, FitpDeviceManager)
 BEEEON_OBJECT_CASTABLE(StoppableRunnable)
@@ -52,7 +53,7 @@ using namespace std;
 #define FITP_DATA_OFFSET     6
 #define JOIN_REQUEST_LENGTH  6
 
-#define DEFAULT_REFRESH_TIME 60 * Timespan::SECONDS
+static const RefreshTime DEFAULT_REFRESH_TIME = RefreshTime::fromSeconds(60);
 
 #define PRODUCT_COORDINATOR "Temperature sensor"
 #define PRODUCT_END_DEVICE  "Temperature and humidity sensor"
@@ -195,29 +196,19 @@ void FitpDeviceManager::handleGeneric(const Command::Ptr cmd, Result::Ptr result
 
 void FitpDeviceManager::dispatchNewDevice(FitpDevice::Ptr device)
 {
-	NewDeviceCommand::Ptr cmd;
+	auto builder = DeviceDescription::Builder();
+	builder.id(device->deviceID());
+	builder.refreshTime(DEFAULT_REFRESH_TIME);
+	builder.modules(device->modules());
 
-	if (device->type() == FitpDevice::END_DEVICE) {
-		cmd = new NewDeviceCommand(
-			device->deviceID(),
-			VENDOR,
-			PRODUCT_END_DEVICE,
-			device->modules(FitpDevice::END_DEVICE),
-			DEFAULT_REFRESH_TIME);
-	}
-	else if (device->type() == FitpDevice::COORDINATOR) {
-		cmd = new NewDeviceCommand(
-			device->deviceID(),
-			VENDOR,
-			PRODUCT_COORDINATOR,
-			device->modules(FitpDevice::COORDINATOR),
-			DEFAULT_REFRESH_TIME);
-	}
-	else {
+	if (device->type() == FitpDevice::END_DEVICE)
+		builder.type(VENDOR, PRODUCT_END_DEVICE);
+	else if (device->type() == FitpDevice::COORDINATOR)
+		builder.type(VENDOR, PRODUCT_COORDINATOR);
+	else
 		throw InvalidArgumentException("invalid device type");
-	}
 
-	dispatch(cmd);
+	dispatch(new NewDeviceCommand(builder.build()));
 }
 
 void FitpDeviceManager::setConfigPath(const string &configPath)

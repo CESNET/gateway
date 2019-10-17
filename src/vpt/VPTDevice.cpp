@@ -108,13 +108,31 @@ const std::list<ModuleType> VPTDevice::BOILER_MODULE_TYPES = {
 const int VPTDevice::COUNT_OF_ZONES = 4;
 
 
-VPTDevice::VPTDevice(const SocketAddress& address):
-	m_address(address)
+VPTDevice::VPTDevice(
+		const Poco::Net::SocketAddress& address,
+		const Poco::Timespan& httpTimeout,
+		const Poco::Timespan& pingTimeout,
+		const GatewayID& id,
+		const RefreshTime& refresh,
+		const DeviceCache::Ptr deviceCache):
+	m_address(address),
+	m_refresh(refresh),
+	m_pingTimeout(pingTimeout),
+	m_httpTimeout(httpTimeout),
+	m_gatewayID(id),
+	m_deviceCache(deviceCache)
 {
+	buildDeviceID();
 }
 
-VPTDevice::VPTDevice()
+DeviceID VPTDevice::id() const
 {
+	return m_boilerId;
+}
+
+RefreshTime VPTDevice::refresh() const
+{
+	return m_refresh;
 }
 
 DeviceID VPTDevice::boilerID() const
@@ -140,6 +158,16 @@ void VPTDevice::setPassword(const string& pwd)
 FastMutex& VPTDevice::lock()
 {
 	return m_lock;
+}
+
+void VPTDevice::poll(Distributor::Ptr distributor)
+{
+	FastMutex::ScopedLock guard(m_lock);
+
+	for (auto one : requestValues()) {
+		if (m_deviceCache->paired(one.deviceID()))
+			distributor->exportData(one);
+	}
 }
 
 string VPTDevice::generateStamp(const Action action)
@@ -195,17 +223,6 @@ void VPTDevice::stampVPT(const Action action)
 bool VPTDevice::operator==(const VPTDevice& other) const
 {
 	return other.boilerID() == m_boilerId;
-}
-
-VPTDevice::Ptr VPTDevice::buildDevice(const SocketAddress& address,
-	const Timespan& httpTimeout, const Timespan& pingTimeout, const GatewayID& id)
-{
-	VPTDevice::Ptr device = new VPTDevice(address);
-	device->m_httpTimeout = httpTimeout;
-	device->m_pingTimeout = pingTimeout;
-	device->m_gatewayID = id;
-	device->buildDeviceID();
-	return device;
 }
 
 void VPTDevice::buildDeviceID()
@@ -512,29 +529,31 @@ vector<SensorData> VPTDevice::requestValues()
 	return parser.parse(m_boilerId, response.getBody());
 }
 
-vector<NewDeviceCommand::Ptr> VPTDevice::createNewDeviceCommands(Timespan& refresh)
+vector<DeviceDescription> VPTDevice::descriptions(const RefreshTime& refresh) const
 {
-	vector<NewDeviceCommand::Ptr> vector;
+	vector<DeviceDescription> vector;
 
-	std::list<ModuleType> zoneModules = VPTDevice::ZONE_MODULE_TYPES;
 	for (int i = 1; i <= COUNT_OF_ZONES; i++) {
-		vector.push_back(
-			new NewDeviceCommand(
-				VPTDevice::createSubdeviceID(i, m_boilerId),
-				VPT_VENDOR,
-				"Zone " + to_string(i),
-				zoneModules,
-				refresh));
+		const auto description = DeviceDescription::Builder()
+			.id(VPTDevice::createSubdeviceID(i, m_boilerId))
+			.type(VPT_VENDOR, "Zone " + to_string(i))
+			.modules(VPTDevice::ZONE_MODULE_TYPES)
+			.refreshTime(refresh)
+			.ipAddress(m_address.host())
+			.build();
+
+		vector.push_back(description);
 	}
 
-	std::list<ModuleType> boilerModules = VPTDevice::BOILER_MODULE_TYPES;
-	vector.push_back(
-		new NewDeviceCommand(
-			m_boilerId,
-			VPT_VENDOR,
-			"Boiler",
-			boilerModules,
-			refresh));
+	const auto description = DeviceDescription::Builder()
+		.id(m_boilerId)
+		.type(VPT_VENDOR, "Boiler")
+		.modules(VPTDevice::BOILER_MODULE_TYPES)
+		.refreshTime(refresh)
+		.ipAddress(m_address.host())
+		.build();
+
+	vector.push_back(description);
 
 	return vector;
 }
