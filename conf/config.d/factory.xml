@@ -30,7 +30,7 @@
 			<add name="exporters" ref="gwServerConnector" if-yes="${gws.enable}" />
 			<set name="eventsExecutor" ref="asyncExecutor"/>
 			<add name="listeners" ref="loggingCollector" if-yes="${testing.collector.enable}" />
-			<add name="listeners" ref="collector" if-yes="${nemea.collector.enable}" />
+			<add name="listeners" ref="nemeaCollector" if-yes="${nemea.collector.enable}" />
 		</instance>
 
 		<instance name="asyncExecutor" class="BeeeOn::SequentialAsyncExecutor">
@@ -57,7 +57,7 @@
 			<add name="listeners" ref="loggingCollector" if-yes="${testing.collector.enable}" />
 			<add name="handlers" ref="fitpDeviceManager" if-yes="${fitp.enable}"/>
 			<add name="handlers" ref="zwaveDeviceManager" if-yes="${zwave.enable}"/>
-			<add name="listeners" ref="collector"/>
+			<add name="listeners" ref="nemeaCollector" if-yes="${nemea.collector.enable}" />
 		</instance>
 
 		<instance name="deviceStatusFetcher" class="BeeeOn::DeviceStatusFetcher">
@@ -114,15 +114,15 @@
 
 		<instance name="loggingCollector" class="BeeeOn::LoggingCollector" />
 
-		<instance name="collector" class="BeeeOn::NemeaCollector">
-			<set name="onExportInterface" text="u:event-onExport"/>
-			<set name="onHCIStatsInterface" text="u:event-onHCIStats"/>
-			<set name="onNodeStatsInterface" text="u:event-onNodeStats"/>	
-			<set name="onDriverStatsInterface" text="u:event-onDriverStats"/>	
-			<set name="onNotificationInterface" text="u:event-onNotification"/>	
-			<set name="onDispatchInterface" text="u:event-onDispatch"/>	
-			<set name="exportGwID" text="1101"/>	
-        </instance>
+		<instance name="nemeaCollector" class="BeeeOn::NemeaCollector" >
+			<set name="onExportInterface" text="u:beeeOnEvent-export"/>
+			<set name="onHCIStatsInterface" text="u:beeeOnEvent-HCIStats"/>
+			<set name="onNodeStatsInterface" text="u:beeeOnEvent-nodeStats"/>
+			<set name="onDriverStatsInterface" text="u:beeeOnEvent-driverStats"/>
+			<set name="onNotificationInterface" text="u:beeeOnEvent-notification"/>
+			<set name="onDispatchInterface" text="u:beeeOnEvent-dispatch"/>
+			<set name="exportGwID" text="1101"/>
+		</instance>
 
 		<instance name="credentialsTool" class="BeeeOn::CredentialsTool">
 			<set name="cryptoConfig" ref="cryptoConfig" />
@@ -137,7 +137,7 @@
 		<instance name="fsDeviceCache" class="BeeeOn::FilesystemDeviceCache">
 			<set name="cacheDir" text="${cache.devices.dir}" />
 		</instance>
-  
+
 		<alias name="deviceCache" ref="${cache.devices.impl}DeviceCache" />
 	</factory>
 </system>
